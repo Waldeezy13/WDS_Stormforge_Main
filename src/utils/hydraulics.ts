@@ -24,11 +24,16 @@ export interface OverlapRegion {
   structures: string[]; // IDs of overlapping structures
 }
 
+export type SubmergenceLevel = 'none' | 'partial' | 'full';
+
 export interface DischargeResult {
   dischargeCfs: number;
-  flowType: 'orifice' | 'weir' | 'dry';
+  flowType: 'orifice' | 'weir' | 'submerged_orifice' | 'submerged_weir' | 'dry';
   formula: string;
   variables: Record<string, number>;
+  isSubmerged?: boolean; // True if tailwater affects the discharge
+  submergenceLevel?: SubmergenceLevel; // none, partial, or full submergence
+  submergenceRatio?: number; // Tailwater depth / upstream head (for weirs)
   derivations?: Array<{
     variable: string;
     name: string;
@@ -182,12 +187,176 @@ export function calculateWeirFlow(
 }
 
 /**
+ * Calculates submerged weir flow using the Villemonte equation
+ * Q_submerged = Q_free * [1 - (H2/H1)^n]^0.385
+ * Where:
+ *   H1 = upstream head above crest (ft)
+ *   H2 = downstream (tailwater) head above crest (ft)
+ *   n = exponent for weir type (1.5 for rectangular/broad crested)
+ */
+export function calculateSubmergedWeirFlow(
+  lengthFt: number,
+  upstreamHeadFt: number,
+  tailwaterHeadAboveCrestFt: number,
+  c: number
+): DischargeResult {
+  if (upstreamHeadFt <= 0) {
+    return { dischargeCfs: 0, flowType: 'dry', formula: 'Q = 0 (Upstream Head <= 0)', variables: { upstreamHeadFt } };
+  }
+
+  // If tailwater is at or below crest, use free weir flow
+  if (tailwaterHeadAboveCrestFt <= 0) {
+    return calculateWeirFlow(lengthFt, upstreamHeadFt, c);
+  }
+
+  // Calculate free discharge first
+  const h15 = Math.pow(upstreamHeadFt, 1.5);
+  const qFree = c * lengthFt * h15;
+
+  // Submergence ratio
+  const submergenceRatio = tailwaterHeadAboveCrestFt / upstreamHeadFt;
+  
+  // If fully submerged (tailwater >= upstream), very little to no flow
+  if (submergenceRatio >= 1.0) {
+    return {
+      dischargeCfs: 0,
+      flowType: 'submerged_weir',
+      formula: 'Q ≈ 0 (Fully submerged: TW ≥ Upstream)',
+      variables: {
+        H1: parseFloat(upstreamHeadFt.toFixed(4)),
+        H2: parseFloat(tailwaterHeadAboveCrestFt.toFixed(4)),
+        ratio: parseFloat(submergenceRatio.toFixed(4))
+      },
+      isSubmerged: true,
+      submergenceLevel: 'full' as SubmergenceLevel,
+      submergenceRatio
+    };
+  }
+
+  // Villemonte equation: Q = Q_free * [1 - (H2/H1)^n]^0.385
+  // n = 1.5 for rectangular weirs
+  const n = 1.5;
+  const submergenceFactor = Math.pow(1 - Math.pow(submergenceRatio, n), 0.385);
+  const qSubmerged = qFree * submergenceFactor;
+
+  // Determine if partial or approaching full based on ratio
+  // Ratio > 0.8 is considered heavily submerged (approaching full)
+  const submergenceLevel: SubmergenceLevel = submergenceRatio > 0.8 ? 'full' : 'partial';
+
+  return {
+    dischargeCfs: qSubmerged,
+    flowType: 'submerged_weir',
+    formula: 'Q = Q_free × [1 - (H₂/H₁)^1.5]^0.385 (Villemonte)',
+    variables: {
+      C: c,
+      L: parseFloat(lengthFt.toFixed(4)),
+      H1: parseFloat(upstreamHeadFt.toFixed(4)),
+      H2: parseFloat(tailwaterHeadAboveCrestFt.toFixed(4)),
+      Q_free: parseFloat(qFree.toFixed(4)),
+      submergence_factor: parseFloat(submergenceFactor.toFixed(4))
+    },
+    isSubmerged: true,
+    submergenceLevel,
+    submergenceRatio,
+    derivations: [
+      {
+        variable: 'Q_free',
+        name: 'Free Weir Discharge',
+        calculation: `Q_free = ${c} × ${lengthFt.toFixed(4)} × ${upstreamHeadFt.toFixed(4)}^1.5 = ${qFree.toFixed(4)}`,
+        value: qFree,
+        unit: 'cfs'
+      },
+      {
+        variable: 'H₂/H₁',
+        name: 'Submergence Ratio',
+        calculation: `${tailwaterHeadAboveCrestFt.toFixed(4)} / ${upstreamHeadFt.toFixed(4)} = ${submergenceRatio.toFixed(4)}`,
+        value: submergenceRatio,
+        unit: ''
+      },
+      {
+        variable: 'Factor',
+        name: 'Villemonte Factor',
+        calculation: `[1 - ${submergenceRatio.toFixed(4)}^1.5]^0.385 = ${submergenceFactor.toFixed(4)}`,
+        value: submergenceFactor,
+        unit: ''
+      }
+    ]
+  };
+}
+
+/**
+ * Calculates submerged orifice flow
+ * For submerged orifice, effective head = upstream WSE - tailwater WSE
+ * Q = C * A * sqrt(2 * g * ΔH)
+ */
+export function calculateSubmergedOrificeFlow(
+  areaSqFt: number,
+  upstreamElevation: number,
+  tailwaterElevation: number,
+  c: number
+): DischargeResult {
+  const deltaH = upstreamElevation - tailwaterElevation;
+  
+  if (deltaH <= 0) {
+    return { 
+      dischargeCfs: 0, 
+      flowType: 'submerged_orifice', 
+      formula: 'Q = 0 (No head differential)', 
+      variables: { 
+        upstream: parseFloat(upstreamElevation.toFixed(4)), 
+        tailwater: parseFloat(tailwaterElevation.toFixed(4)),
+        deltaH: parseFloat(deltaH.toFixed(4))
+      },
+      isSubmerged: true
+    };
+  }
+
+  const sqrt2gh = Math.sqrt(2 * GRAVITY * deltaH);
+  const q = c * areaSqFt * sqrt2gh;
+
+  return {
+    dischargeCfs: q,
+    flowType: 'submerged_orifice',
+    formula: 'Q = C * A * sqrt(2 * g * ΔH)',
+    variables: {
+      C: c,
+      A: parseFloat(areaSqFt.toFixed(4)),
+      g: GRAVITY,
+      deltaH: parseFloat(deltaH.toFixed(4))
+    },
+    isSubmerged: true,
+    derivations: [
+      {
+        variable: 'ΔH',
+        name: 'Effective Head (Upstream - Tailwater)',
+        calculation: `ΔH = ${upstreamElevation.toFixed(4)} - ${tailwaterElevation.toFixed(4)} = ${deltaH.toFixed(4)}`,
+        value: deltaH,
+        unit: 'ft'
+      },
+      {
+        variable: 'sqrt(2gΔH)',
+        name: 'Velocity Head Term',
+        calculation: `sqrt(2 * ${GRAVITY} * ${deltaH.toFixed(4)}) = ${sqrt2gh.toFixed(4)}`,
+        value: sqrt2gh,
+        unit: 'ft/s'
+      }
+    ]
+  };
+}
+
+/**
  * Calculates discharge for a single structure based on water elevation.
- * automatically transitions between Weir and Orifice flow.
+ * Automatically transitions between Weir and Orifice flow.
+ * Accounts for tailwater submergence effects when tailwaterElevation is provided.
+ * 
+ * @param structure - The outfall structure (orifice/weir)
+ * @param waterElevation - Upstream water surface elevation (pond WSE)
+ * @param tailwaterElevation - Optional downstream water surface elevation (HGL in outlet)
  */
 export function getStructureDischarge(
   structure: OutfallStructure,
-  waterElevation: number
+  waterElevation: number,
+  tailwaterElevation?: number
 ): DischargeResult {
   const headAboveInvert = waterElevation - structure.invertElevation;
 
@@ -215,6 +384,17 @@ export function getStructureDischarge(
     value: headAboveInvert,
     unit: 'ft'
   });
+
+  // Add tailwater info if provided
+  if (tailwaterElevation !== undefined) {
+    derivations.push({
+      variable: 'Tailwater',
+      name: 'Tailwater Elevation',
+      calculation: `TW = ${tailwaterElevation.toFixed(4)}`,
+      value: tailwaterElevation,
+      unit: 'ft'
+    });
+  }
 
   if (structure.type === 'circular') {
     const r = (structure.diameterFt || 0) / 2;
@@ -255,56 +435,166 @@ export function getStructureDischarge(
     centroidHeight = height / 2;
   }
 
-  // Check if Submerged (Orifice Flow)
+  // Calculate key elevations for tailwater analysis
+  const crestElevation = structure.invertElevation; // For weir, crest = invert
+  const centroidElevation = structure.invertElevation + centroidHeight;
+  const topOfOpeningElevation = structure.invertElevation + height;
+
+  // Check if upstream water fully submerges the opening (Orifice Flow vs Weir Flow)
   // Standard engineering practice: orifice flow occurs when head > transitionRatio * height
   // Default transition ratio is 1.1 (conservative), standard is typically 1.4-1.5
   // This ensures the opening is fully submerged before using orifice equation
   const transitionRatio = getOrificeWeirTransitionRatio();
-  const isSubmerged = headAboveInvert > (height * transitionRatio);
+  const isOrificeFlow = headAboveInvert > (height * transitionRatio);
 
-  if (isSubmerged) {
-    // Orifice Flow - Opening is fully submerged
-    // Head for orifice is measured to Centroid
-    const headToCentroid = headAboveInvert - centroidHeight;
+  // Determine tailwater conditions relative to orifice boundaries
+  // KEY: Tailwater effects are controlled by the TOP and BOTTOM of the opening, NOT the centroid
+  // - Tailwater < invert → no effect (free discharge)
+  // - Tailwater between invert and top → partially submerged
+  // - Tailwater >= top → fully submerged
+  const tailwaterAboveInvert = tailwaterElevation !== undefined && tailwaterElevation > crestElevation;
+  const tailwaterAboveTop = tailwaterElevation !== undefined && tailwaterElevation >= topOfOpeningElevation;
+  const hasTailwaterEffect = tailwaterAboveInvert; // Tailwater affects flow when it reaches the opening
+
+  if (isOrificeFlow) {
+    // Orifice Flow - Opening is fully submerged by upstream water
     
-    derivations.push({
-      variable: 'h',
-      name: 'Head to Centroid',
-      calculation: `h = Head Above Invert - Centroid = ${headAboveInvert.toFixed(4)} - ${centroidHeight.toFixed(4)}`,
-      value: headToCentroid,
-      unit: 'ft'
-    });
-    
-    const result = calculateOrificeFlow(area, headToCentroid, structure.dischargeCoefficient);
-    return {
-      ...result,
-      derivations: [...derivations, ...(result.derivations || [])]
-    };
-  } else {
-    // Weir Flow - Opening is partially or not submerged
-    // Water flows over/through the opening, not through it as an orifice
-    
-    if (structure.type === 'rectangular') {
-      // Rectangular Weir: Q = C * L * H^1.5
-      // L = width (wetted width at water surface)
+    // Now check tailwater effects on the orifice
+    if (tailwaterAboveInvert && tailwaterElevation !== undefined) {
+      // Tailwater has reached the orifice - flow is affected
+      
+      if (tailwaterAboveTop) {
+        // FULLY SUBMERGED ORIFICE: Tailwater >= top of opening
+        // Use differential head: ΔH = upstream WSE - downstream WSE
+        derivations.push({
+          variable: 'Condition',
+          name: 'Flow Condition',
+          calculation: `Tailwater (${tailwaterElevation.toFixed(2)} ft) ≥ Top of Opening (${topOfOpeningElevation.toFixed(2)} ft) → Fully Submerged Orifice`,
+          value: 1,
+          unit: ''
+        });
+        
+        const result = calculateSubmergedOrificeFlow(
+          area,
+          waterElevation,
+          tailwaterElevation,
+          structure.dischargeCoefficient
+        );
+        return {
+          ...result,
+          submergenceLevel: 'full' as SubmergenceLevel,
+          derivations: [...derivations, ...(result.derivations || [])]
+        };
+      } else {
+        // PARTIALLY SUBMERGED (DROWNED) ORIFICE: Tailwater between invert and top
+        // Use differential head measured to centroid reference
+        // Q = Cd * A * sqrt(2g * (H1 - H2)) where H1 and H2 are measured to same reference
+        derivations.push({
+          variable: 'Condition',
+          name: 'Flow Condition',
+          calculation: `Tailwater (${tailwaterElevation.toFixed(2)} ft) between Invert (${crestElevation.toFixed(2)} ft) and Top (${topOfOpeningElevation.toFixed(2)} ft) → Partially Submerged Orifice`,
+          value: 1,
+          unit: ''
+        });
+        
+        // For partial submergence, effective head = upstream head - tailwater head (both from same reference)
+        const upstreamHead = waterElevation - centroidElevation;
+        const tailwaterHead = Math.max(0, tailwaterElevation - centroidElevation);
+        const effectiveHead = upstreamHead - tailwaterHead;
+        
+        derivations.push({
+          variable: 'H1',
+          name: 'Upstream Head (to centroid)',
+          calculation: `H1 = WSE - Centroid = ${waterElevation.toFixed(4)} - ${centroidElevation.toFixed(4)} = ${upstreamHead.toFixed(4)}`,
+          value: upstreamHead,
+          unit: 'ft'
+        });
+        
+        derivations.push({
+          variable: 'H2',
+          name: 'Tailwater Head (to centroid)',
+          calculation: `H2 = TW - Centroid = ${tailwaterElevation.toFixed(4)} - ${centroidElevation.toFixed(4)} = ${tailwaterHead.toFixed(4)}`,
+          value: tailwaterHead,
+          unit: 'ft'
+        });
+        
+        derivations.push({
+          variable: 'ΔH',
+          name: 'Effective Head',
+          calculation: `ΔH = H1 - H2 = ${upstreamHead.toFixed(4)} - ${tailwaterHead.toFixed(4)} = ${effectiveHead.toFixed(4)}`,
+          value: effectiveHead,
+          unit: 'ft'
+        });
+        
+        if (effectiveHead <= 0) {
+          return {
+            dischargeCfs: 0,
+            flowType: 'submerged_orifice',
+            formula: 'Q = 0 (No head differential)',
+            variables: { H1: upstreamHead, H2: tailwaterHead, effectiveHead },
+            isSubmerged: true,
+            submergenceLevel: 'partial' as SubmergenceLevel,
+            derivations
+          };
+        }
+        
+        const sqrt2gh = Math.sqrt(2 * GRAVITY * effectiveHead);
+        const q = structure.dischargeCoefficient * area * sqrt2gh;
+        
+        return {
+          dischargeCfs: q,
+          flowType: 'submerged_orifice',
+          formula: 'Q = Cd * A * sqrt(2g * ΔH) [Partially Submerged]',
+          variables: {
+            Cd: structure.dischargeCoefficient,
+            A: parseFloat(area.toFixed(4)),
+            g: GRAVITY,
+            deltaH: parseFloat(effectiveHead.toFixed(4))
+          },
+          isSubmerged: true,
+          submergenceLevel: 'partial' as SubmergenceLevel,
+          derivations
+        };
+      }
+    } else {
+      // FREE ORIFICE: Tailwater below invert, no effect
+      // Head measured to centroid
+      const headToCentroid = headAboveInvert - centroidHeight;
+      
       derivations.push({
-        variable: 'L',
-        name: 'Wetted Length',
-        calculation: `L = Width = ${width.toFixed(4)}`,
-        value: width,
+        variable: 'Condition',
+        name: 'Flow Condition',
+        calculation: tailwaterElevation !== undefined 
+          ? `Tailwater (${tailwaterElevation.toFixed(2)} ft) < Invert (${crestElevation.toFixed(2)} ft) → Free Orifice`
+          : 'No tailwater specified → Free Orifice',
+        value: 0,
+        unit: ''
+      });
+      
+      derivations.push({
+        variable: 'h',
+        name: 'Head to Centroid',
+        calculation: `h = Head Above Invert - Centroid = ${headAboveInvert.toFixed(4)} - ${centroidHeight.toFixed(4)}`,
+        value: headToCentroid,
         unit: 'ft'
       });
       
-      const result = calculateWeirFlow(width, headAboveInvert, structure.dischargeCoefficient);
+      const result = calculateOrificeFlow(area, headToCentroid, structure.dischargeCoefficient);
       return {
         ...result,
         derivations: [...derivations, ...(result.derivations || [])]
       };
-    } else {
-      // Circular Partial Flow - Treat as weir
-      // Calculate actual wetted width (chord length) at the water surface
+    }
+  } else {
+    // Weir Flow - Opening is partially submerged or free flowing
+    
+    // Calculate weir parameters
+    let weirLength = width;
+    
+    if (structure.type === 'circular') {
+      // Circular Partial Flow - Calculate wetted width (chord length)
       const r = (structure.diameterFt || 0) / 2;
-      const h = headAboveInvert; // Head above invert
+      const h = headAboveInvert;
       
       if (h <= 0 || r <= 0) {
         return {
@@ -316,30 +606,63 @@ export function getStructureDischarge(
         };
       }
       
-      // Calculate wetted width using helper function
-      const wettedWidth = calculateCircularWettedWidth(r, h);
+      weirLength = calculateCircularWettedWidth(r, h);
       
-      if (wettedWidth <= 0) {
+      if (weirLength <= 0) {
         return {
           dischargeCfs: 0,
           flowType: 'dry',
           formula: 'Q = 0 (No wetted width)',
-          variables: { h, r, wettedWidth },
+          variables: { h, r, weirLength },
           derivations
         };
       }
       
-      // Add wetted width calculation derivation
       const distFromCenter = Math.abs(h - r);
       derivations.push({
         variable: 'L',
         name: 'Wetted Width (Chord)',
-        calculation: `L = 2 * sqrt(r² - d²) = 2 * sqrt(${r.toFixed(4)}² - ${distFromCenter.toFixed(4)}²) = ${wettedWidth.toFixed(4)}`,
-        value: wettedWidth,
+        calculation: `L = 2 * sqrt(r² - d²) = 2 * sqrt(${r.toFixed(4)}² - ${distFromCenter.toFixed(4)}²) = ${weirLength.toFixed(4)}`,
+        value: weirLength,
         unit: 'ft'
       });
+    } else {
+      derivations.push({
+        variable: 'L',
+        name: 'Wetted Length',
+        calculation: `L = Width = ${width.toFixed(4)}`,
+        value: width,
+        unit: 'ft'
+      });
+    }
+    
+    // Check if tailwater submerges the weir (TW above crest/invert)
+    if (hasTailwaterEffect && tailwaterElevation !== undefined) {
+      // SUBMERGED WEIR: Apply Villemonte correction
+      const upstreamHead = headAboveInvert;
+      const tailwaterHeadAboveCrest = tailwaterElevation - crestElevation;
       
-      const result = calculateWeirFlow(wettedWidth, headAboveInvert, structure.dischargeCoefficient);
+      derivations.push({
+        variable: 'Condition',
+        name: 'Flow Condition',
+        calculation: `Tailwater (${tailwaterElevation.toFixed(2)} ft) > Crest (${crestElevation.toFixed(2)} ft) → Submerged Weir`,
+        value: 1,
+        unit: ''
+      });
+      
+      const result = calculateSubmergedWeirFlow(
+        weirLength,
+        upstreamHead,
+        tailwaterHeadAboveCrest,
+        structure.dischargeCoefficient
+      );
+      return {
+        ...result,
+        derivations: [...derivations, ...(result.derivations || [])]
+      };
+    } else {
+      // FREE WEIR FLOW
+      const result = calculateWeirFlow(weirLength, headAboveInvert, structure.dischargeCoefficient);
       return {
         ...result,
         derivations: [...derivations, ...(result.derivations || [])]
@@ -350,21 +673,43 @@ export function getStructureDischarge(
 
 /**
  * Calculates total discharge from multiple structures
+ * @param structures - Array of outfall structures
+ * @param waterElevation - Upstream water surface elevation (pond WSE)
+ * @param tailwaterElevation - Optional downstream water surface elevation (HGL in outlet)
  */
 export function calculateTotalDischarge(
   structures: OutfallStructure[],
-  waterElevation: number
-): { totalDischarge: number; details: { id: string; result: DischargeResult }[] } {
+  waterElevation: number,
+  tailwaterElevation?: number
+): { 
+  totalDischarge: number; 
+  details: { id: string; result: DischargeResult }[]; 
+  hasSubmergence: boolean;
+  worstSubmergenceLevel: SubmergenceLevel;
+} {
   let total = 0;
   const details = [];
+  let hasSubmergence = false;
+  let worstSubmergenceLevel: SubmergenceLevel = 'none';
 
   for (const s of structures) {
-    const result = getStructureDischarge(s, waterElevation);
+    const result = getStructureDischarge(s, waterElevation, tailwaterElevation);
     total += result.dischargeCfs;
     details.push({ id: s.id, result });
+    
+    if (result.isSubmerged) {
+      hasSubmergence = true;
+    }
+    
+    // Track worst submergence level (none < partial < full)
+    if (result.submergenceLevel === 'full') {
+      worstSubmergenceLevel = 'full';
+    } else if (result.submergenceLevel === 'partial' && worstSubmergenceLevel !== 'full') {
+      worstSubmergenceLevel = 'partial';
+    }
   }
 
-  return { totalDischarge: total, details };
+  return { totalDischarge: total, details, hasSubmergence, worstSubmergenceLevel };
 }
 
 /**

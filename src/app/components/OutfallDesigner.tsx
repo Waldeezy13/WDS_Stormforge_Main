@@ -476,6 +476,7 @@ interface OutfallDesignerProps {
 const STORAGE_KEY_STRUCTURES = 'outfallDesigner_structures';
 const STORAGE_KEY_PLATE_SIZE = 'outfallDesigner_plateSize';
 const STORAGE_KEY_OUTFALL_STYLE = 'outfallDesigner_outfallStyle';
+const STORAGE_KEY_TAILWATER = 'outfallDesigner_tailwater';
 
 export default function OutfallDesigner({ results, pondDims, pondInvertElevation = 0 }: OutfallDesignerProps) {
   // Calculate derived pond values
@@ -532,10 +533,30 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
     return 'orifice_plate';
   };
 
+  // Helper to get initial tailwater elevations from localStorage or default
+  const getInitialTailwater = (): Record<string, number> => {
+    if (typeof window === 'undefined') {
+      return {};
+    }
+    const stored = localStorage.getItem(STORAGE_KEY_TAILWATER);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (typeof parsed === 'object' && parsed !== null) {
+          return parsed;
+        }
+      } catch (e) {
+        console.error('Failed to parse stored tailwater:', e);
+      }
+    }
+    return {};
+  };
+
   // Outfall configuration state with persistence
   const [outfallStyle, setOutfallStyleState] = useState<OutfallStyle>(getInitialOutfallStyle);
   const [plateSize, setPlateSizeState] = useState(getInitialPlateSize);
   const [structures, setStructuresState] = useState<OutfallStructure[]>(getInitialStructures);
+  const [tailwaterElevations, setTailwaterElevationsState] = useState<Record<string, number>>(getInitialTailwater);
   
   // Wrapped setters that also persist to localStorage
   const setOutfallStyle = (style: OutfallStyle) => {
@@ -557,6 +578,16 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
       const resolved = typeof newStructures === 'function' ? newStructures(prev) : newStructures;
       if (typeof window !== 'undefined') {
         localStorage.setItem(STORAGE_KEY_STRUCTURES, JSON.stringify(resolved));
+      }
+      return resolved;
+    });
+  };
+
+  const setTailwaterElevations = (newTailwater: Record<string, number> | ((prev: Record<string, number>) => Record<string, number>)) => {
+    setTailwaterElevationsState(prev => {
+      const resolved = typeof newTailwater === 'function' ? newTailwater(prev) : newTailwater;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(STORAGE_KEY_TAILWATER, JSON.stringify(resolved));
       }
       return resolved;
     });
@@ -652,10 +683,11 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
     
     // Calculate discharge from ALL OTHER structures at this WSE
     // These are already set and will contribute to the total discharge
+    const tailwater = tailwaterElevations[stormEvent]; // May be undefined
     const otherStructures = structures.filter(s => s.id !== structureId);
     let otherStructuresDischarge = 0;
     for (const otherStructure of otherStructures) {
-      const result = getStructureDischarge(otherStructure, stormData.wse);
+      const result = getStructureDischarge(otherStructure, stormData.wse, tailwater);
       otherStructuresDischarge += result.dischargeCfs;
     }
     
@@ -795,10 +827,11 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
     const wse = getWSE(res.requiredStorageCf);
     const waterDepth = wse - pondInvertElevation;
     const freeboard = pondTopElevation - wse;
-    const { totalDischarge, details } = calculateTotalDischarge(structures, wse);
+    const tailwater = tailwaterElevations[res.stormEvent]; // May be undefined
+    const { totalDischarge, details, hasSubmergence, worstSubmergenceLevel } = calculateTotalDischarge(structures, wse, tailwater);
     const isPassing = totalDischarge <= res.allowableReleaseRateCfs;
     const hasAdequateFreeboard = freeboard >= 1.0; // Typically 1ft minimum freeboard
-    return { res, wse, waterDepth, freeboard, totalDischarge, details, isPassing, hasAdequateFreeboard };
+    return { res, wse, waterDepth, freeboard, totalDischarge, details, isPassing, hasAdequateFreeboard, tailwater, hasSubmergence, submergenceLevel: worstSubmergenceLevel };
   });
 
   // Determine which event to show detailed breakdown for (default to first if none selected)
@@ -872,6 +905,7 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                 <tr>
                   <th className="px-3 py-2 text-left rounded-tl-md">Storm</th>
                   <th className="px-3 py-2 text-right">WSE (ft)</th>
+                  <th className="px-3 py-2 text-right">Tailwater (ft)</th>
                   <th className="px-3 py-2 text-right">Water Depth (ft)</th>
                   <th className="px-3 py-2 text-right">Freeboard (ft)</th>
                   <th className="px-3 py-2 text-right">Allowable Q (cfs)</th>
@@ -900,6 +934,44 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                         </span>
                       </td>
                       <td className="px-3 py-3 text-right font-mono">{data.wse.toFixed(2)}</td>
+                      <td className="px-3 py-3 text-right" onClick={e => e.stopPropagation()}>
+                        <input 
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="—"
+                          defaultValue={data.tailwater !== undefined ? data.tailwater.toFixed(2) : ''}
+                          key={`tw-${data.res.stormEvent}-${data.tailwater}`}
+                          onBlur={e => {
+                            const value = parseFloat(e.target.value);
+                            if (e.target.value === '' || e.target.value.trim() === '') {
+                              // Clear tailwater for this storm
+                              setTailwaterElevations(prev => {
+                                const next = { ...prev };
+                                delete next[data.res.stormEvent];
+                                return next;
+                              });
+                            } else if (!isNaN(value)) {
+                              setTailwaterElevations(prev => ({
+                                ...prev,
+                                [data.res.stormEvent]: roundToPrecision(value)
+                              }));
+                            }
+                          }}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              e.currentTarget.blur();
+                            }
+                          }}
+                          className={`w-16 bg-background border rounded px-2 py-1 text-xs font-mono text-right focus:ring-1 focus:ring-primary outline-none ${
+                            data.submergenceLevel === 'full' 
+                              ? 'border-red-500 text-red-400' 
+                              : data.submergenceLevel === 'partial'
+                                ? 'border-amber-500 text-amber-400'
+                                : 'border-input'
+                          }`}
+                          title="Tailwater elevation (leave empty for free discharge)"
+                        />
+                      </td>
                       <td className="px-3 py-3 text-right font-mono text-primary">{data.waterDepth.toFixed(2)}</td>
                       <td className={`px-3 py-3 text-right font-mono font-medium ${
                         data.hasAdequateFreeboard ? 'text-emerald-500' : 'text-red-500'
@@ -912,7 +984,15 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                       <td className={`px-3 py-3 text-right font-mono font-medium ${
                         data.isPassing ? 'text-emerald-500' : 'text-red-500'
                       }`}>
-                        {data.totalDischarge.toFixed(2)}
+                        <div className="flex items-center justify-end gap-1">
+                          {data.submergenceLevel === 'full' && (
+                            <Waves className="w-3 h-3 text-red-400" title="Fully submerged - tailwater above top of opening" />
+                          )}
+                          {data.submergenceLevel === 'partial' && (
+                            <Waves className="w-3 h-3 text-amber-400" title="Partially submerged - tailwater in opening" />
+                          )}
+                          {data.totalDischarge.toFixed(2)}
+                        </div>
                       </td>
                       <td className="px-3 py-3 text-center">
                         <div className="flex items-center justify-center gap-1">
@@ -934,14 +1014,36 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
           </div>
           
           {/* Freeboard Note */}
-          <div className="mt-3 pt-3 border-t border-border/50 flex items-start gap-2 text-xs text-muted-foreground">
-            <Droplets className="w-4 h-4 flex-shrink-0 mt-0.5" />
-            <div>
-              <span className="font-medium">Freeboard</span> is the distance from the water surface to the top of the pond. 
-              Minimum recommended freeboard is <span className="font-mono font-medium text-foreground">1.0 ft</span>.
-              {summaryData.some(d => !d.hasAdequateFreeboard) && (
-                <span className="text-amber-500 ml-1">⚠ Some storms have insufficient freeboard.</span>
-              )}
+          <div className="mt-3 pt-3 border-t border-border/50 space-y-2">
+            <div className="flex items-start gap-2 text-xs text-muted-foreground">
+              <Droplets className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <div>
+                <span className="font-medium">Freeboard</span> is the distance from the water surface to the top of the pond. 
+                Minimum recommended freeboard is <span className="font-mono font-medium text-foreground">1.0 ft</span>.
+                {summaryData.some(d => !d.hasAdequateFreeboard) && (
+                  <span className="text-amber-500 ml-1">⚠ Some storms have insufficient freeboard.</span>
+                )}
+              </div>
+            </div>
+            <div className="flex items-start gap-2 text-xs text-muted-foreground">
+              <Waves className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-400" />
+              <div className="flex-1">
+                <span className="font-medium">Tailwater</span> is the downstream water elevation (HGL in outlet pipe). 
+                <span className="ml-2">Below invert:</span>
+                <span className="text-emerald-400 ml-1">Free</span>
+                <span className="mx-1">•</span>
+                <Waves className="w-3 h-3 text-amber-400 inline-block align-middle" />
+                <span className="text-amber-400 ml-1">Partial</span>
+                <span className="mx-1">•</span>
+                <Waves className="w-3 h-3 text-red-400 inline-block align-middle" />
+                <span className="text-red-400 ml-1">Full</span>
+                {summaryData.some(d => d.submergenceLevel === 'full') && (
+                  <span className="text-red-400 ml-2">⚠ Some fully submerged</span>
+                )}
+                {summaryData.some(d => d.submergenceLevel === 'partial') && !summaryData.some(d => d.submergenceLevel === 'full') && (
+                  <span className="text-amber-400 ml-2">Some partially submerged</span>
+                )}
+              </div>
             </div>
           </div>
         </section>
@@ -1207,90 +1309,94 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                               </div>
                             ) : (
                               <>
-                                <div className="flex flex-col w-12">
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      updateStructure(s.id, 'widthFt', Math.max(0.01, (s.widthFt || 0) + 0.01));
-                                    }}
-                                    className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
-                                  >
-                                    <ChevronUpIcon className="w-3 h-3 text-gray-400" />
-                                  </button>
-                                  <input 
-                                    type="text"
-                                    inputMode="decimal"
-                                    defaultValue={(s.widthFt || 0).toFixed(2)}
-                                    key={`width-${s.id}-${s.widthFt}`}
-                                    onBlur={e => {
-                                      const value = parseFloat(e.target.value);
-                                      if (!isNaN(value) && value >= 0) {
-                                        updateStructure(s.id, 'widthFt', roundToPrecision(Math.max(0.01, value)));
-                                      }
-                                      e.target.value = (s.widthFt || 0).toFixed(2);
-                                    }}
-                                    onKeyDown={e => {
-                                      if (e.key === 'Enter') {
-                                        e.currentTarget.blur();
-                                      }
-                                    }}
-                                    className="w-12 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
-                                    placeholder="W"
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      updateStructure(s.id, 'widthFt', Math.max(0.01, (s.widthFt || 0) - 0.01));
-                                    }}
-                                    className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
-                                  >
-                                    <ChevronDownIcon className="w-3 h-3 text-gray-400" />
-                                  </button>
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs text-gray-400 font-medium" title="Width (horizontal)">W</span>
+                                  <div className="flex flex-col w-12">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        updateStructure(s.id, 'widthFt', Math.max(0.01, (s.widthFt || 0) + 0.01));
+                                      }}
+                                      className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
+                                    >
+                                      <ChevronUpIcon className="w-3 h-3 text-gray-400" />
+                                    </button>
+                                    <input 
+                                      type="text"
+                                      inputMode="decimal"
+                                      defaultValue={(s.widthFt || 0).toFixed(2)}
+                                      key={`width-${s.id}-${s.widthFt}`}
+                                      onBlur={e => {
+                                        const value = parseFloat(e.target.value);
+                                        if (!isNaN(value) && value >= 0) {
+                                          updateStructure(s.id, 'widthFt', roundToPrecision(Math.max(0.01, value)));
+                                        }
+                                        e.target.value = (s.widthFt || 0).toFixed(2);
+                                      }}
+                                      onKeyDown={e => {
+                                        if (e.key === 'Enter') {
+                                          e.currentTarget.blur();
+                                        }
+                                      }}
+                                      className="w-12 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        updateStructure(s.id, 'widthFt', Math.max(0.01, (s.widthFt || 0) - 0.01));
+                                      }}
+                                      className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
+                                    >
+                                      <ChevronDownIcon className="w-3 h-3 text-gray-400" />
+                                    </button>
+                                  </div>
                                 </div>
                                 <span className="text-gray-500">×</span>
-                                <div className="flex flex-col w-12">
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      updateStructure(s.id, 'heightFt', Math.max(0.01, (s.heightFt || 0) + 0.01));
-                                    }}
-                                    className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
-                                  >
-                                    <ChevronUpIcon className="w-3 h-3 text-gray-400" />
-                                  </button>
-                                  <input 
-                                    type="text"
-                                    inputMode="decimal"
-                                    defaultValue={(s.heightFt || 0).toFixed(2)}
-                                    key={`height-${s.id}-${s.heightFt}`}
-                                    onBlur={e => {
-                                      const value = parseFloat(e.target.value);
-                                      if (!isNaN(value) && value >= 0) {
-                                        updateStructure(s.id, 'heightFt', roundToPrecision(Math.max(0.01, value)));
-                                      }
-                                      e.target.value = (s.heightFt || 0).toFixed(2);
-                                    }}
-                                    onKeyDown={e => {
-                                      if (e.key === 'Enter') {
-                                        e.currentTarget.blur();
-                                      }
-                                    }}
-                                    className="w-12 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
-                                    placeholder="H"
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      updateStructure(s.id, 'heightFt', Math.max(0.01, (s.heightFt || 0) - 0.01));
-                                    }}
-                                    className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
-                                  >
-                                    <ChevronDownIcon className="w-3 h-3 text-gray-400" />
-                                  </button>
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs text-gray-400 font-medium" title="Height (vertical)">H</span>
+                                  <div className="flex flex-col w-12">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        updateStructure(s.id, 'heightFt', Math.max(0.01, (s.heightFt || 0) + 0.01));
+                                      }}
+                                      className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
+                                    >
+                                      <ChevronUpIcon className="w-3 h-3 text-gray-400" />
+                                    </button>
+                                    <input 
+                                      type="text"
+                                      inputMode="decimal"
+                                      defaultValue={(s.heightFt || 0).toFixed(2)}
+                                      key={`height-${s.id}-${s.heightFt}`}
+                                      onBlur={e => {
+                                        const value = parseFloat(e.target.value);
+                                        if (!isNaN(value) && value >= 0) {
+                                          updateStructure(s.id, 'heightFt', roundToPrecision(Math.max(0.01, value)));
+                                        }
+                                        e.target.value = (s.heightFt || 0).toFixed(2);
+                                      }}
+                                      onKeyDown={e => {
+                                        if (e.key === 'Enter') {
+                                          e.currentTarget.blur();
+                                        }
+                                      }}
+                                      className="w-12 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        updateStructure(s.id, 'heightFt', Math.max(0.01, (s.heightFt || 0) - 0.01));
+                                      }}
+                                      className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
+                                    >
+                                      <ChevronDownIcon className="w-3 h-3 text-gray-400" />
+                                    </button>
+                                  </div>
                                 </div>
                                 <span className="text-xs text-gray-500">ft</span>
                               </>
