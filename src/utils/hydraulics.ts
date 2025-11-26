@@ -1,3 +1,5 @@
+import { getOrificeWeirTransitionRatio } from './hydraulicsConfig';
+
 export type OutfallStructureType = 'circular' | 'rectangular';
 
 export interface OutfallStructure {
@@ -92,23 +94,41 @@ export function calculateOrificeFlow(
  * @param radius - Radius of the circle (ft)
  * @param headAboveInvert - Head of water above the invert of the opening (ft)
  * @returns Wetted width at the water surface (ft)
+ * 
+ * Geometry: Circle center is at radius above invert (at y = radius).
+ * Water surface is horizontal at y = headAboveInvert.
+ * The chord is the horizontal line where water intersects the circle.
+ * Vertical distance from center to chord: |headAboveInvert - radius|
+ * Chord length = 2 * sqrt(r^2 - (vertical_dist)^2)
  */
 function calculateCircularWettedWidth(radius: number, headAboveInvert: number): number {
   if (headAboveInvert <= 0 || radius <= 0) return 0;
   
   // Circle center is at radius above invert
   // Water surface is at headAboveInvert above invert
-  const distFromCenter = Math.abs(headAboveInvert - radius);
+  // Vertical distance from center to water surface (chord)
+  const verticalDistFromCenter = Math.abs(headAboveInvert - radius);
   
   // If water level is at or above the top, return full diameter
   if (headAboveInvert >= 2 * radius) {
     return 2 * radius;
   }
   
-  // Calculate chord width: 2 * sqrt(r^2 - d^2) where d is distance from center to water surface
-  const wettedWidth = 2 * Math.sqrt(radius * radius - distFromCenter * distFromCenter);
+  // If water level is at or below invert, no wetted width
+  if (headAboveInvert <= 0) {
+    return 0;
+  }
+  
+  // Calculate chord width: 2 * sqrt(r^2 - d^2) where d is vertical distance from center to chord
+  // This gives the horizontal width of the circle at the water surface
+  const wettedWidth = 2 * Math.sqrt(radius * radius - verticalDistFromCenter * verticalDistFromCenter);
   
   // Ensure result is valid (between 0 and diameter)
+  // Handle edge case where verticalDistFromCenter >= radius (shouldn't happen if headAboveInvert < 2*radius)
+  if (verticalDistFromCenter >= radius) {
+    return 0;
+  }
+  
   return Math.max(0, Math.min(wettedWidth, 2 * radius));
 }
 
@@ -236,8 +256,11 @@ export function getStructureDischarge(
   }
 
   // Check if Submerged (Orifice Flow)
-  // Submerged if water level > invert + height (fully covering the opening)
-  const isSubmerged = headAboveInvert > height;
+  // Standard engineering practice: orifice flow occurs when head > transitionRatio * height
+  // Default transition ratio is 1.1 (conservative), standard is typically 1.4-1.5
+  // This ensures the opening is fully submerged before using orifice equation
+  const transitionRatio = getOrificeWeirTransitionRatio();
+  const isSubmerged = headAboveInvert > (height * transitionRatio);
 
   if (isSubmerged) {
     // Orifice Flow - Opening is fully submerged
@@ -420,4 +443,425 @@ export function detectOverlaps(structures: OutfallStructure[]): OverlapRegion[] 
   }
   
   return overlaps;
+}
+
+/**
+ * Solver result interface
+ */
+export interface SolverResult {
+  success: boolean;
+  error?: string;
+  warning?: string; // Warning message when solution is partial/constrained
+  dimensions?: {
+    diameterFt?: number;
+    widthFt?: number;
+    heightFt?: number;
+  };
+  actualDischarge?: number; // Actual discharge achieved with solved dimensions
+  targetDischarge?: number; // Original target for reference
+  isPartialSolution?: boolean; // True if solution couldn't meet target but got as close as possible
+}
+
+// Tolerance for solver - solution is acceptable if within 0.01 cfs of target
+const SOLVER_TOLERANCE_CFS = 0.01;
+
+// Round to 0.01 precision
+export function roundToPrecision(value: number, precision: number = 0.01): number {
+  return Math.round(value / precision) * precision;
+}
+
+/**
+ * Solves for orifice size to achieve target discharge
+ * Q = C * A * sqrt(2 * g * h)
+ * A = Q / (C * sqrt(2 * g * h))
+ */
+export function solveOrificeSize(
+  targetDischargeCfs: number,
+  headToCentroidFt: number,
+  dischargeCoefficient: number,
+  structureType: OutfallStructureType,
+  currentHeightFt?: number // For rectangular, keep height fixed
+): SolverResult {
+  if (targetDischargeCfs <= 0) {
+    return { success: false, error: 'Solution cannot be found with current layout: target discharge must be positive' };
+  }
+  
+  if (headToCentroidFt <= 0) {
+    return { success: false, error: 'Solution cannot be found with current layout: head must be positive for orifice flow' };
+  }
+  
+  if (dischargeCoefficient <= 0) {
+    return { success: false, error: 'Solution cannot be found with current layout: discharge coefficient must be positive' };
+  }
+
+  const sqrt2gh = Math.sqrt(2 * GRAVITY * headToCentroidFt);
+  const requiredArea = targetDischargeCfs / (dischargeCoefficient * sqrt2gh);
+
+  if (requiredArea <= 0 || !isFinite(requiredArea)) {
+    return { success: false, error: 'Solution cannot be found with current layout: calculated area is invalid' };
+  }
+
+  if (structureType === 'circular') {
+    const radius = Math.sqrt(requiredArea / Math.PI);
+    const diameter = 2 * radius;
+    
+    if (diameter <= 0 || !isFinite(diameter)) {
+      return { success: false, error: 'Solution cannot be found with current layout: invalid diameter calculated' };
+    }
+    
+    // Round to 0.01 precision
+    const roundedDiameter = roundToPrecision(diameter);
+    
+    return {
+      success: true,
+      dimensions: { diameterFt: roundedDiameter }
+    };
+  } else {
+    // Rectangular - solve for width, keep height fixed
+    if (!currentHeightFt || currentHeightFt <= 0) {
+      return { success: false, error: 'Solution cannot be found with current layout: height must be specified for rectangular orifice' };
+    }
+    
+    const width = requiredArea / currentHeightFt;
+    
+    if (width <= 0 || !isFinite(width)) {
+      return { success: false, error: 'Solution cannot be found with current layout: invalid width calculated' };
+    }
+    
+    // Round to 0.01 precision
+    const roundedWidth = roundToPrecision(width);
+    const roundedHeight = roundToPrecision(currentHeightFt);
+    
+    return {
+      success: true,
+      dimensions: { widthFt: roundedWidth, heightFt: roundedHeight }
+    };
+  }
+}
+
+/**
+ * Solves for weir size to achieve target discharge
+ * Q = C * L * H^1.5
+ * L = Q / (C * H^1.5)
+ */
+export function solveWeirSize(
+  targetDischargeCfs: number,
+  headAboveInvertFt: number,
+  dischargeCoefficient: number,
+  structureType: OutfallStructureType,
+  currentHeightFt?: number // For rectangular, keep height fixed (not used in weir calc but needed for validation)
+): SolverResult {
+  if (targetDischargeCfs <= 0) {
+    return { success: false, error: 'Solution cannot be found with current layout: target discharge must be positive' };
+  }
+  
+  if (headAboveInvertFt <= 0) {
+    return { success: false, error: 'Solution cannot be found with current layout: head must be positive for weir flow' };
+  }
+  
+  if (dischargeCoefficient <= 0) {
+    return { success: false, error: 'Solution cannot be found with current layout: discharge coefficient must be positive' };
+  }
+
+  const h15 = Math.pow(headAboveInvertFt, 1.5);
+  const requiredLength = targetDischargeCfs / (dischargeCoefficient * h15);
+
+  if (requiredLength <= 0 || !isFinite(requiredLength)) {
+    return { success: false, error: 'Solution cannot be found with current layout: calculated length is invalid' };
+  }
+
+  if (structureType === 'rectangular') {
+    // For rectangular weir, length = width
+    // Round to 0.01 precision
+    const roundedWidth = roundToPrecision(requiredLength);
+    const roundedHeight = currentHeightFt ? roundToPrecision(currentHeightFt) : undefined;
+    
+    return {
+      success: true,
+      dimensions: { 
+        widthFt: roundedWidth,
+        heightFt: roundedHeight // Keep height unchanged if provided
+      }
+    };
+  } else {
+    // Circular weir - need to solve iteratively for diameter
+    // The wetted width depends on both radius and head
+    // Use binary search to find diameter that gives correct wetted width
+    
+    const tolerance = 0.001; // 0.001 ft tolerance for diameter
+    const maxIterations = 100;
+    let minDiameter = 0.01; // Minimum diameter (ft)
+    let maxDiameter = 20; // Maximum reasonable diameter (ft)
+    
+    // Check if solution is possible at max diameter
+    let testRadius = maxDiameter / 2;
+    let testWettedWidth = calculateCircularWettedWidth(testRadius, headAboveInvertFt);
+    if (testWettedWidth < requiredLength) {
+      return { success: false, error: 'Solution cannot be found with current layout: requires diameter larger than 20 ft' };
+    }
+    
+    // Binary search
+    for (let i = 0; i < maxIterations; i++) {
+      const testDiameter = (minDiameter + maxDiameter) / 2;
+      const radius = testDiameter / 2;
+      const wettedWidth = calculateCircularWettedWidth(radius, headAboveInvertFt);
+      
+      if (Math.abs(wettedWidth - requiredLength) < tolerance) {
+        // Round to 0.01 precision
+        const roundedDiameter = roundToPrecision(testDiameter);
+        return {
+          success: true,
+          dimensions: { diameterFt: roundedDiameter }
+        };
+      }
+      
+      if (wettedWidth < requiredLength) {
+        minDiameter = testDiameter;
+      } else {
+        maxDiameter = testDiameter;
+      }
+      
+      if (maxDiameter - minDiameter < tolerance) {
+        // Converged - round to 0.01 precision
+        const roundedDiameter = roundToPrecision((minDiameter + maxDiameter) / 2);
+        return {
+          success: true,
+          dimensions: { diameterFt: roundedDiameter }
+        };
+      }
+    }
+    
+    return { success: false, error: 'Solution cannot be found with current layout: failed to converge on solution' };
+  }
+}
+
+/**
+ * Solves for structure size to achieve target discharge.
+ * Uses a comprehensive search that evaluates all possible sizes within plate constraints,
+ * considering both orifice and weir flow regimes to find the optimal solution.
+ * 
+ * Goal: Find the size that produces the MAXIMUM discharge that is <= target (allowable)
+ */
+export function solveStructureSize(
+  structure: OutfallStructure,
+  targetDischargeCfs: number,
+  waterElevation: number,
+  plateWidthFt?: number,
+  plateHeightFt?: number,
+  plateBottomElevation?: number // The elevation of the bottom of the plate (typically pond invert)
+): SolverResult {
+  if (targetDischargeCfs <= 0) {
+    return { success: false, error: 'Target discharge must be positive' };
+  }
+
+  const headAboveInvert = waterElevation - structure.invertElevation;
+  
+  if (headAboveInvert <= 0) {
+    return { success: false, error: 'Water level is below structure invert' };
+  }
+
+  // Define search bounds
+  const minSize = 0.01; // Minimum opening size (ft)
+  const maxWidth = plateWidthFt ?? 20; // Max width constraint
+  const totalPlateHeight = plateHeightFt ?? 20; // Total plate height
+  
+  // Calculate the available vertical space for this structure
+  // The structure's top cannot exceed the top of the plate
+  // Available height = (plate bottom + plate height) - structure invert
+  const plateBottom = plateBottomElevation ?? 0;
+  const plateTop = plateBottom + totalPlateHeight;
+  const availableVerticalSpace = plateTop - structure.invertElevation;
+  
+  // If the structure's invert is already at or above the plate top, no solution possible
+  if (availableVerticalSpace <= 0) {
+    return { success: false, error: `Structure invert (${structure.invertElevation.toFixed(2)} ft) is at or above the plate top (${plateTop.toFixed(2)} ft)` };
+  }
+  
+  // For rectangular openings, we keep the current height fixed and vary width
+  // For circular openings, we vary diameter (constrained by available vertical space)
+  const fixedHeight = structure.type === 'rectangular' ? (structure.heightFt || 1) : undefined;
+  
+  // Ensure fixed height doesn't exceed available space
+  const effectiveFixedHeight = fixedHeight 
+    ? Math.min(fixedHeight, availableVerticalSpace) 
+    : undefined;
+  
+  // Track the best solution found (store raw size, only round at the end)
+  let bestSize: number | null = null;
+  let bestDischarge = 0;
+  
+  // Max search size depends on structure type
+  // For circular: limited by BOTH width and available vertical space
+  // For rectangular: width is limited by plate width, height is already fixed
+  const maxSearchSize = structure.type === 'circular' 
+    ? Math.min(maxWidth, availableVerticalSpace) // Circular must fit in both dimensions
+    : maxWidth;
+  
+  // Helper to evaluate a specific size and get discharge
+  const evaluateSize = (size: number): number => {
+    const testStructure: OutfallStructure = { ...structure };
+    
+    if (structure.type === 'circular') {
+      testStructure.diameterFt = size;
+    } else {
+      testStructure.widthFt = size;
+      testStructure.heightFt = effectiveFixedHeight;
+    }
+    
+    const result = getStructureDischarge(testStructure, waterElevation);
+    return result.dischargeCfs;
+  };
+  
+  // Helper to update best if this is a better solution
+  const updateBestIfBetter = (size: number, discharge: number): boolean => {
+    // Must be at or under target (with tiny epsilon for floating point)
+    if (discharge > targetDischargeCfs + 0.0001) {
+      return false;
+    }
+    
+    // Is this better than current best?
+    if (discharge > bestDischarge) {
+      bestSize = size;
+      bestDischarge = discharge;
+      return true;
+    }
+    return false;
+  };
+  
+  // Step 1: Coarse search across entire range
+  const coarseSteps = 200;
+  const coarseStepSize = (maxSearchSize - minSize) / coarseSteps;
+  
+  for (let i = 0; i <= coarseSteps; i++) {
+    const size = minSize + (i * coarseStepSize);
+    const discharge = evaluateSize(size);
+    updateBestIfBetter(size, discharge);
+  }
+  
+  // Step 2: Fine search - check all rounded values (0.01 precision)
+  // This ensures we find the exact best value at the precision we'll return
+  const numFineSteps = Math.ceil((maxSearchSize - minSize) / 0.01);
+  
+  for (let i = 0; i <= numFineSteps; i++) {
+    const size = roundToPrecision(minSize + (i * 0.01));
+    if (size > maxSearchSize) break;
+    
+    const discharge = evaluateSize(size);
+    updateBestIfBetter(size, discharge);
+  }
+  
+  // Step 3: If we have a best, do micro-refinement around it
+  // Check values just above and below to ensure we have the true best
+  if (bestSize !== null) {
+    // Check all values in 0.01 increments around the best
+    for (let delta = -0.05; delta <= 0.05; delta += 0.01) {
+      const testSize = roundToPrecision(bestSize + delta);
+      if (testSize < minSize || testSize > maxSearchSize) continue;
+      
+      const discharge = evaluateSize(testSize);
+      updateBestIfBetter(testSize, discharge);
+    }
+  }
+  
+  // No valid solution found
+  if (bestSize === null) {
+    return { 
+      success: false, 
+      error: `No valid solution found. Even the smallest opening exceeds the allowable discharge of ${targetDischargeCfs.toFixed(2)} cfs.`
+    };
+  }
+  
+  // Round the best size to 0.01 precision for the final result
+  const finalSize = roundToPrecision(bestSize);
+  
+  // Build final dimensions
+  const finalDimensions: { diameterFt?: number; widthFt?: number; heightFt?: number } = {};
+  if (structure.type === 'circular') {
+    finalDimensions.diameterFt = finalSize;
+  } else {
+    finalDimensions.widthFt = finalSize;
+    finalDimensions.heightFt = effectiveFixedHeight;
+  }
+  
+  // Verify the final solution with the exact dimensions we're returning
+  const verifyStructure: OutfallStructure = {
+    ...structure,
+    ...finalDimensions
+  };
+  const verifyResult = getStructureDischarge(verifyStructure, waterElevation);
+  const verifiedDischarge = verifyResult.dischargeCfs;
+  const flowType = verifyResult.flowType;
+  
+  // Double-check: if the rounded value exceeds target, step down by 0.01
+  if (verifiedDischarge > targetDischargeCfs + 0.0001) {
+    const adjustedSize = roundToPrecision(finalSize - 0.01);
+    if (adjustedSize >= minSize) {
+      if (structure.type === 'circular') {
+        finalDimensions.diameterFt = adjustedSize;
+      } else {
+        finalDimensions.widthFt = adjustedSize;
+      }
+      
+      const adjustedStructure: OutfallStructure = {
+        ...structure,
+        ...finalDimensions
+      };
+      const adjustedResult = getStructureDischarge(adjustedStructure, waterElevation);
+      
+      // Use adjusted values
+      const adjustedDischarge = adjustedResult.dischargeCfs;
+      const adjustedFlowType = adjustedResult.flowType;
+      
+      const dischargeError = Math.abs(adjustedDischarge - targetDischargeCfs);
+      
+      if (dischargeError <= SOLVER_TOLERANCE_CFS) {
+        return {
+          success: true,
+          dimensions: finalDimensions,
+          actualDischarge: adjustedDischarge,
+          targetDischarge: targetDischargeCfs
+        };
+      } else {
+        const sizeDesc = structure.type === 'circular' 
+          ? `diameter: ${finalDimensions.diameterFt?.toFixed(2)} ft`
+          : `width: ${finalDimensions.widthFt?.toFixed(2)} ft × height: ${finalDimensions.heightFt?.toFixed(2)} ft`;
+        
+        return {
+          success: true,
+          isPartialSolution: true,
+          warning: `Cannot meet allowable within 0.01 cfs. Best solution (${sizeDesc}, ${adjustedFlowType} flow) achieves ${adjustedDischarge.toFixed(2)} cfs (target: ${targetDischargeCfs.toFixed(2)} cfs)`,
+          dimensions: finalDimensions,
+          actualDischarge: adjustedDischarge,
+          targetDischarge: targetDischargeCfs
+        };
+      }
+    }
+  }
+  
+  // Return result based on verified discharge
+  const dischargeError = Math.abs(verifiedDischarge - targetDischargeCfs);
+  
+  if (dischargeError <= SOLVER_TOLERANCE_CFS) {
+    // Exact or near-exact solution
+    return {
+      success: true,
+      dimensions: finalDimensions,
+      actualDischarge: verifiedDischarge,
+      targetDischarge: targetDischargeCfs
+    };
+  } else {
+    // Partial solution - best we can do without exceeding
+    const sizeDesc = structure.type === 'circular' 
+      ? `diameter: ${finalDimensions.diameterFt?.toFixed(2)} ft`
+      : `width: ${finalDimensions.widthFt?.toFixed(2)} ft × height: ${finalDimensions.heightFt?.toFixed(2)} ft`;
+    
+    return {
+      success: true,
+      isPartialSolution: true,
+      warning: `Cannot meet allowable within 0.01 cfs. Best solution (${sizeDesc}, ${flowType} flow) achieves ${verifiedDischarge.toFixed(2)} cfs (target: ${targetDischargeCfs.toFixed(2)} cfs)`,
+      dimensions: finalDimensions,
+      actualDischarge: verifiedDischarge,
+      targetDischarge: targetDischargeCfs
+    };
+  }
 }

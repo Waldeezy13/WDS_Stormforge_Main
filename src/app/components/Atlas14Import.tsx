@@ -60,34 +60,6 @@ export default function Atlas14Import() {
     }
   };
 
-  const handleCleanupPlaceholders = async () => {
-    if (!confirm('This will delete all placeholder cities that don\'t have rainfall data. Cities with data will be kept. Continue?')) {
-      return;
-    }
-
-    setClearing(true);
-
-    try {
-      const response = await fetch('/api/atlas14/cities/cleanup', {
-        method: 'POST',
-      });
-
-      const result = await response.json();
-
-      if (response.ok) {
-        clearAtlas14Cache();
-        alert(`Successfully deleted ${result.deletedCount} placeholder city/cities.`);
-        // Refresh the page to update the city list
-        window.location.reload();
-      } else {
-        alert('Failed to cleanup placeholder cities: ' + (result.error || 'Unknown error'));
-      }
-    } catch (error) {
-      alert('Failed to cleanup placeholder cities');
-    } finally {
-      setClearing(false);
-    }
-  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -319,27 +291,6 @@ export default function Atlas14Import() {
       </div>
 
       <div className="flex gap-3">
-        <button
-          onClick={handleCleanupPlaceholders}
-          disabled={clearing}
-          className="flex-1 bg-yellow-500/20 text-yellow-400 border border-yellow-500/50 px-4 py-3 rounded-lg font-medium
-            hover:bg-yellow-500/30 transition-colors
-            disabled:opacity-50 disabled:cursor-not-allowed
-            flex items-center justify-center gap-2"
-        >
-          {clearing ? (
-            <>
-              <div className="w-4 h-4 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin" />
-              Cleaning Up...
-            </>
-          ) : (
-            <>
-              <Trash2 className="w-4 h-4" />
-              Cleanup Placeholder Cities
-            </>
-          )}
-        </button>
-
         <button
           onClick={handleClearData}
           disabled={clearing}

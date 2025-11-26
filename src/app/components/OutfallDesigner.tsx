@@ -1,54 +1,70 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
-import { Trash2, Plus, CheckCircle, XCircle, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
-import { OutfallStructure, OutfallStructureType, calculateTotalDischarge, detectOverlaps, OverlapRegion } from '@/utils/hydraulics';
+import React, { useState, useMemo, useRef, useCallback } from 'react';
+import { Trash2, Plus, CheckCircle, XCircle, AlertTriangle, ChevronDown, ChevronUp, Droplets, Waves, ArrowDownToLine, GripVertical, Sparkles, Loader2, X, ChevronUp as ChevronUpIcon, ChevronDown as ChevronDownIcon, Layers } from 'lucide-react';
+import { OutfallStructure, OutfallStructureType, calculateTotalDischarge, detectOverlaps, OverlapRegion, solveStructureSize, roundToPrecision, getStructureDischarge } from '@/utils/hydraulics';
+import { getOrificeStackingOffset } from '@/utils/hydraulicsConfig';
 import { ModifiedRationalResult } from '@/utils/rationalMethod';
+
+// --- Outfall Type ---
+type OutfallStyle = 'orifice_plate';
 
 // --- Outfall Profile Visualization Component ---
 function OutfallProfile({ 
   structures, 
   pondInvert, 
   wseList,
-  overlaps
+  overlaps,
+  outfallStyle,
+  plateSize,
+  onStyleChange,
+  onPlateSizeChange
 }: { 
   structures: OutfallStructure[], 
   pondInvert: number, 
-  wseList: { label: string; elevation: number; color: string; isPassing: boolean }[],
-  overlaps: OverlapRegion[]
+  wseList: { label: string; elevation: number; color: string; isPassing: boolean; isTopLine?: boolean }[],
+  overlaps: OverlapRegion[],
+  outfallStyle: OutfallStyle,
+  plateSize: { width: number; height: number },
+  onStyleChange: (style: OutfallStyle) => void,
+  onPlateSizeChange: (size: { width: number; height: number }) => void
 }) {
-  // Dimensions
-  const width = 200;
-  const height = 500;
-  const padding = { top: 40, bottom: 40, left: 40, right: 20 };
+  // SVG Dimensions - use viewBox for scaling
+  const svgWidth = 280;
+  const svgHeight = 500;
+  // Increased left padding to ensure tick labels don't overlap with plate
+  const padding = { top: 30, bottom: 30, left: 55, right: 30 };
+  
+  // Graph area dimensions
+  const graphWidth = svgWidth - padding.left - padding.right;
+  const graphHeight = svgHeight - padding.top - padding.bottom;
 
   // Calculate Elevation Range
-  // Min: Pond Invert
-  // Max: Max WSE + 1ft buffer, or Top of highest structure + 1ft
+  // Include plate height in range calculation
   const maxWSE = Math.max(...wseList.map(w => w.elevation), pondInvert + 5);
   const maxStructEl = Math.max(...structures.map(s => s.invertElevation + (s.type === 'circular' ? (s.diameterFt || 0) : (s.heightFt || 0))), pondInvert);
+  const plateTopEl = pondInvert + plateSize.height;
   
   const minEl = pondInvert;
-  const maxEl = Math.max(maxWSE, maxStructEl) + 1;
+  const maxEl = Math.max(maxWSE, maxStructEl, plateTopEl) + 1;
   const elRange = maxEl - minEl || 10; // Prevent div by zero
 
-  // Scale Helper
+  // Scale Helper - Y position from elevation
   const getY = (el: number) => {
     const relativeY = (el - minEl) / elRange;
-    return height - padding.bottom - (relativeY * (height - padding.top - padding.bottom));
+    return svgHeight - padding.bottom - (relativeY * graphHeight);
   };
 
-  // Ticks
-  const tickCount = 10;
+  // Ticks - fewer ticks for cleaner display
+  const tickCount = 8;
   const ticks = Array.from({ length: tickCount + 1 }, (_, i) => minEl + (elRange * i / tickCount));
 
-  // Calculate horizontal extent needed (considering both left and right from center)
-  // Find the leftmost and rightmost extents
+  // Calculate horizontal extent needed for structures
   let minX = 0;
   let maxX = 0;
   
   structures.forEach(s => {
-    const offset = s.horizontalOffsetFt || 0; // 0 = center, negative = left, positive = right
+    const offset = s.horizontalOffsetFt || 0;
     let leftEdge: number;
     let rightEdge: number;
     
@@ -58,7 +74,7 @@ function OutfallProfile({
       rightEdge = offset + dia/2;
     } else {
       const w = s.widthFt || 0;
-      leftEdge = offset - w/2; // Center the rectangle on offset
+      leftEdge = offset - w/2;
       rightEdge = offset + w/2;
     }
     
@@ -66,32 +82,21 @@ function OutfallProfile({
     maxX = Math.max(maxX, rightEdge);
   });
   
-  // Use a fixed plate width in pixels
-  const plateWidthPixels = width - padding.left - padding.right - 20; // Leave some margin
-  const plateX = padding.left + 10; // Small margin from left
-  const plateCenterX = plateX + plateWidthPixels / 2; // Center of plate in pixels
+  // Calculate scale to fit plate within graph area
+  // The plate should be centered and fit within the graph area with margins
+  const plateMargin = 10; // pixels margin on each side
+  const availableWidth = graphWidth - (plateMargin * 2);
   
-  // Calculate Y-scale (feet per pixel) - this is our base scale for keeping circles round
-  const yScaleFtPerPixel = elRange / (height - padding.top - padding.bottom);
+  // Scale based on plate width - plate should fit nicely in available space
+  const xScaleFtPerPixel = Math.max(plateSize.width, 4) / availableWidth;
+  const yScaleFtPerPixel = elRange / graphHeight;
   
-  // Calculate what horizontal extent would fit using the same scale as Y (to keep circles round)
-  // We need to fit from minX to maxX, so total width needed is maxX - minX
-  const totalWidthNeededFt = Math.max(maxX - minX, 1); // At least 1ft
-  const defaultPlateWidthFt = plateWidthPixels * yScaleFtPerPixel;
-  
-  // Determine if we need to scale X independently
-  // If structures fit within default width, use Y-scale for X (circles stay round)
-  // Otherwise, scale X to fit all structures (circles will become ellipses)
-  const needsXScale = totalWidthNeededFt > defaultPlateWidthFt;
-  const plateWidthFt = needsXScale ? totalWidthNeededFt + 2 : defaultPlateWidthFt; // Add 2ft buffer (1ft each side)
-  
-  // X-scale (feet per pixel) - matches Y-scale if possible, otherwise scaled to fit
-  const xScaleFtPerPixel = needsXScale ? plateWidthFt / plateWidthPixels : yScaleFtPerPixel;
+  // Center of the graph area
+  const graphCenterX = padding.left + graphWidth / 2;
   
   // Scale helper for X-axis (feet to pixels) - 0 is at center
   const getX = (xFt: number) => {
-    // xFt is offset from center (0 = center, negative = left, positive = right)
-    return plateCenterX + (xFt / xScaleFtPerPixel);
+    return graphCenterX + (xFt / xScaleFtPerPixel);
   };
   
   // Helper to get width in pixels for a given width in feet
@@ -99,25 +104,100 @@ function OutfallProfile({
     return widthFt / xScaleFtPerPixel;
   };
 
+  // Calculate plate dimensions in pixels for rendering
+  const plateHeightPixels = Math.abs(getY(pondInvert + plateSize.height) - getY(pondInvert));
+  const plateRenderWidth = getWidthPixels(plateSize.width);
+  const plateRenderX = graphCenterX - plateRenderWidth / 2;
+  const plateRenderY = getY(pondInvert + plateSize.height);
+
   return (
     <div className="h-full bg-card border-l border-border flex flex-col shadow-xl relative">
-        <div className="p-4 border-b border-border bg-muted/10">
+        <div className="p-4 border-b border-border bg-muted/10 space-y-3">
             <h3 className="text-sm font-semibold">Outfall Profile</h3>
+            
+            {/* Outfall Style Selector */}
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Outfall Type</label>
+              <select 
+                value={outfallStyle}
+                onChange={(e) => onStyleChange(e.target.value as OutfallStyle)}
+                className="w-full bg-background border border-input rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-primary outline-none"
+              >
+                <option value="orifice_plate">Orifice Plate</option>
+              </select>
+            </div>
+            
+            {/* Plate Size Inputs */}
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Plate Size (ft)</label>
+              <div className="flex items-center gap-2">
+                <input 
+                  type="number" 
+                  step="0.5"
+                  value={plateSize.width}
+                  onChange={(e) => onPlateSizeChange({ ...plateSize, width: parseFloat(e.target.value) || 0 })}
+                  className="w-16 bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                  placeholder="W"
+                />
+                <span className="text-muted-foreground">×</span>
+                <input 
+                  type="number" 
+                  step="0.5"
+                  value={plateSize.height}
+                  onChange={(e) => onPlateSizeChange({ ...plateSize, height: parseFloat(e.target.value) || 0 })}
+                  className="w-16 bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                  placeholder="H"
+                />
+              </div>
+            </div>
         </div>
         <div className="flex-1 relative overflow-hidden">
-            <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet">
+            <svg width="100%" height="100%" viewBox={`0 0 ${svgWidth} ${svgHeight}`} preserveAspectRatio="xMidYMid meet">
+                {/* Metallic Gradient Definitions */}
+                <defs>
+                  {/* Brushed Steel Gradient */}
+                  <linearGradient id="metallicGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stopColor="#4a5568" />
+                    <stop offset="15%" stopColor="#718096" />
+                    <stop offset="30%" stopColor="#a0aec0" />
+                    <stop offset="50%" stopColor="#cbd5e0" />
+                    <stop offset="70%" stopColor="#a0aec0" />
+                    <stop offset="85%" stopColor="#718096" />
+                    <stop offset="100%" stopColor="#4a5568" />
+                  </linearGradient>
+                  
+                  {/* Vertical highlight for 3D effect */}
+                  <linearGradient id="metallicHighlight" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" stopColor="#e2e8f0" stopOpacity="0.8" />
+                    <stop offset="20%" stopColor="#cbd5e0" stopOpacity="0.4" />
+                    <stop offset="80%" stopColor="#4a5568" stopOpacity="0.4" />
+                    <stop offset="100%" stopColor="#2d3748" stopOpacity="0.8" />
+                  </linearGradient>
+                  
+                  {/* Pattern for brushed metal texture */}
+                  <pattern id="brushedTexture" width="4" height="4" patternUnits="userSpaceOnUse">
+                    <line x1="0" y1="0" x2="4" y2="0" stroke="#a0aec0" strokeWidth="0.5" opacity="0.3" />
+                    <line x1="0" y1="2" x2="4" y2="2" stroke="#718096" strokeWidth="0.3" opacity="0.2" />
+                  </pattern>
+                  
+                  {/* Combined metallic fill */}
+                  <pattern id="metalPlate" width="100%" height="100%" patternUnits="objectBoundingBox">
+                    <rect width="100%" height="100%" fill="url(#metallicGradient)" />
+                    <rect width="100%" height="100%" fill="url(#brushedTexture)" />
+                  </pattern>
+                </defs>
                 {/* Grid / Ticks */}
                 {ticks.map(tick => (
                     <g key={tick}>
                         <line 
                             x1={padding.left} y1={getY(tick)} 
-                            x2={width - padding.right} y2={getY(tick)} 
+                            x2={svgWidth - padding.right} y2={getY(tick)} 
                             stroke="#e2e8f0" strokeWidth="1" strokeDasharray="4 4" 
                             className="dark:stroke-slate-700"
                         />
                         <text 
-                            x={padding.left - 5} y={getY(tick)} 
-                            fontSize="10" fill="#94a3b8" 
+                            x={padding.left - 8} y={getY(tick)} 
+                            fontSize="9" fill="#94a3b8" 
                             textAnchor="end" alignmentBaseline="middle"
                         >
                             {tick.toFixed(1)}'
@@ -128,19 +208,19 @@ function OutfallProfile({
                 {/* Pond Bottom */}
                 <line 
                     x1={padding.left} y1={getY(minEl)} 
-                    x2={width - padding.right} y2={getY(minEl)} 
+                    x2={svgWidth - padding.right} y2={getY(minEl)} 
                     stroke="#64748b" strokeWidth="2" 
                 />
 
                 {/* Center Line Indicator (0 position) */}
                 <line 
-                    x1={plateCenterX} y1={padding.top} 
-                    x2={plateCenterX} y2={height - padding.bottom} 
+                    x1={graphCenterX} y1={padding.top} 
+                    x2={graphCenterX} y2={svgHeight - padding.bottom} 
                     stroke="#94a3b8" strokeWidth="1" strokeDasharray="2 2" 
                     opacity="0.5"
                 />
                 <text 
-                    x={plateCenterX} y={padding.top - 5} 
+                    x={graphCenterX} y={padding.top - 5} 
                     fontSize="9" fill="#64748b" 
                     textAnchor="middle"
                     className="font-medium"
@@ -148,12 +228,71 @@ function OutfallProfile({
                     0 (center)
                 </text>
 
-                {/* The Plate */}
-                <rect 
-                    x={plateX} y={padding.top} 
-                    width={plateWidthPixels} height={height - padding.top - padding.bottom} 
-                    fill="#cbd5e1" className="dark:fill-slate-700"
-                />
+                {/* The Metallic Orifice Plate */}
+                <g>
+                  {/* Main plate body with metallic gradient */}
+                  <rect 
+                    x={plateRenderX} 
+                    y={plateRenderY} 
+                    width={plateRenderWidth} 
+                    height={plateHeightPixels} 
+                    fill="url(#metallicGradient)"
+                    stroke="#4a5568"
+                    strokeWidth="2"
+                  />
+                  
+                  {/* 3D highlight overlay */}
+                  <rect 
+                    x={plateRenderX} 
+                    y={plateRenderY} 
+                    width={plateRenderWidth} 
+                    height={plateHeightPixels} 
+                    fill="url(#metallicHighlight)"
+                  />
+                  
+                  {/* Brushed texture overlay */}
+                  <rect 
+                    x={plateRenderX} 
+                    y={plateRenderY} 
+                    width={plateRenderWidth} 
+                    height={plateHeightPixels} 
+                    fill="url(#brushedTexture)"
+                  />
+                  
+                  {/* Top edge highlight */}
+                  <line 
+                    x1={plateRenderX + 2} 
+                    y1={plateRenderY + 2} 
+                    x2={plateRenderX + plateRenderWidth - 2} 
+                    y2={plateRenderY + 2}
+                    stroke="#e2e8f0"
+                    strokeWidth="1"
+                    opacity="0.6"
+                  />
+                  
+                  {/* Bottom edge shadow */}
+                  <line 
+                    x1={plateRenderX + 2} 
+                    y1={plateRenderY + plateHeightPixels - 2} 
+                    x2={plateRenderX + plateRenderWidth - 2} 
+                    y2={plateRenderY + plateHeightPixels - 2}
+                    stroke="#2d3748"
+                    strokeWidth="1"
+                    opacity="0.6"
+                  />
+                  
+                  {/* Plate label */}
+                  <text 
+                    x={plateRenderX + plateRenderWidth / 2} 
+                    y={plateRenderY - 5}
+                    fontSize="8" 
+                    fill="#94a3b8" 
+                    textAnchor="middle"
+                    fontWeight="bold"
+                  >
+                    {plateSize.width}' × {plateSize.height}' PLATE
+                  </text>
+                </g>
 
                 {/* Structures */}
                 {structures.map(s => {
@@ -277,19 +416,40 @@ function OutfallProfile({
                 {/* Water Levels */}
                 {wseList.map((wse, i) => (
                     <g key={wse.label}>
-                        <line 
-                            x1={padding.left} y1={getY(wse.elevation)} 
-                            x2={width - padding.right} y2={getY(wse.elevation)} 
-                            stroke={wse.color} strokeWidth="2" strokeDasharray={wse.isPassing ? "" : "5 2"}
-                            opacity="0.8"
-                        />
-                        <text 
-                            x={width - padding.right} y={getY(wse.elevation) - 4} 
-                            fontSize="10" fill={wse.color} fontWeight="bold"
-                            textAnchor="end"
-                        >
-                            {wse.label}
-                        </text>
+                        {wse.isTopLine ? (
+                          <>
+                            {/* Pond Top Line - thick solid line */}
+                            <line 
+                                x1={padding.left} y1={getY(wse.elevation)} 
+                                x2={svgWidth - padding.right} y2={getY(wse.elevation)} 
+                                stroke={wse.color} strokeWidth="3"
+                                opacity="1"
+                            />
+                            <text 
+                                x={padding.left + 2} y={getY(wse.elevation) - 4} 
+                                fontSize="9" fill={wse.color} fontWeight="bold"
+                                textAnchor="start"
+                            >
+                                POND TOP
+                            </text>
+                          </>
+                        ) : (
+                          <>
+                            <line 
+                                x1={padding.left} y1={getY(wse.elevation)} 
+                                x2={svgWidth - padding.right} y2={getY(wse.elevation)} 
+                                stroke={wse.color} strokeWidth="2" strokeDasharray={wse.isPassing ? "" : "5 2"}
+                                opacity="0.8"
+                            />
+                            <text 
+                                x={svgWidth - padding.right} y={getY(wse.elevation) - 4} 
+                                fontSize="10" fill={wse.color} fontWeight="bold"
+                                textAnchor="end"
+                            >
+                                {wse.label}
+                            </text>
+                          </>
+                        )}
                     </g>
                 ))}
 
@@ -300,19 +460,147 @@ function OutfallProfile({
 }
 
 
+interface PondDims {
+  length: number;
+  width: number;
+  depth: number;
+}
+
 interface OutfallDesignerProps {
   results: ModifiedRationalResult[];
-  pondAreaSqFt: number; // Surface area to convert Volume to Depth (assuming vertical walls)
+  pondDims: PondDims;
   pondInvertElevation?: number;
 }
 
-export default function OutfallDesigner({ results, pondAreaSqFt, pondInvertElevation = 0 }: OutfallDesignerProps) {
-  // --- State ---
-  const [structures, setStructures] = useState<OutfallStructure[]>([
-    { id: '1', type: 'circular', invertElevation: pondInvertElevation + 0.5, horizontalOffsetFt: 0, diameterFt: 1, dischargeCoefficient: 0.6 }
-  ]); // horizontalOffsetFt: 0 = center, negative = left, positive = right
+// LocalStorage keys for persistence
+const STORAGE_KEY_STRUCTURES = 'outfallDesigner_structures';
+const STORAGE_KEY_PLATE_SIZE = 'outfallDesigner_plateSize';
+const STORAGE_KEY_OUTFALL_STYLE = 'outfallDesigner_outfallStyle';
+
+export default function OutfallDesigner({ results, pondDims, pondInvertElevation = 0 }: OutfallDesignerProps) {
+  // Calculate derived pond values
+  const pondAreaSqFt = pondDims.length * pondDims.width;
+  const pondTopElevation = pondInvertElevation + pondDims.depth;
+  
+  // Helper to get initial structures from localStorage or default
+  const getInitialStructures = (): OutfallStructure[] => {
+    if (typeof window === 'undefined') {
+      return [{ id: '1', type: 'circular', invertElevation: pondInvertElevation, horizontalOffsetFt: 0, diameterFt: 1, dischargeCoefficient: 0.6 }];
+    }
+    const stored = localStorage.getItem(STORAGE_KEY_STRUCTURES);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      } catch (e) {
+        console.error('Failed to parse stored structures:', e);
+      }
+    }
+    return [{ id: '1', type: 'circular', invertElevation: pondInvertElevation, horizontalOffsetFt: 0, diameterFt: 1, dischargeCoefficient: 0.6 }];
+  };
+
+  // Helper to get initial plate size from localStorage or default
+  const getInitialPlateSize = (): { width: number; height: number } => {
+    if (typeof window === 'undefined') {
+      return { width: 4, height: 6 };
+    }
+    const stored = localStorage.getItem(STORAGE_KEY_PLATE_SIZE);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (parsed && typeof parsed.width === 'number' && typeof parsed.height === 'number') {
+          return parsed;
+        }
+      } catch (e) {
+        console.error('Failed to parse stored plate size:', e);
+      }
+    }
+    return { width: 4, height: 6 };
+  };
+
+  // Helper to get initial outfall style from localStorage or default
+  const getInitialOutfallStyle = (): OutfallStyle => {
+    if (typeof window === 'undefined') {
+      return 'orifice_plate';
+    }
+    const stored = localStorage.getItem(STORAGE_KEY_OUTFALL_STYLE);
+    if (stored === 'orifice_plate') {
+      return stored;
+    }
+    return 'orifice_plate';
+  };
+
+  // Outfall configuration state with persistence
+  const [outfallStyle, setOutfallStyleState] = useState<OutfallStyle>(getInitialOutfallStyle);
+  const [plateSize, setPlateSizeState] = useState(getInitialPlateSize);
+  const [structures, setStructuresState] = useState<OutfallStructure[]>(getInitialStructures);
+  
+  // Wrapped setters that also persist to localStorage
+  const setOutfallStyle = (style: OutfallStyle) => {
+    setOutfallStyleState(style);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY_OUTFALL_STYLE, style);
+    }
+  };
+
+  const setPlateSize = (size: { width: number; height: number }) => {
+    setPlateSizeState(size);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY_PLATE_SIZE, JSON.stringify(size));
+    }
+  };
+
+  const setStructures = (newStructures: OutfallStructure[] | ((prev: OutfallStructure[]) => OutfallStructure[])) => {
+    setStructuresState(prev => {
+      const resolved = typeof newStructures === 'function' ? newStructures(prev) : newStructures;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(STORAGE_KEY_STRUCTURES, JSON.stringify(resolved));
+      }
+      return resolved;
+    });
+  };
+
   const [selectedDetailEvent, setSelectedDetailEvent] = useState<string | null>(null);
   const [expandedDerivations, setExpandedDerivations] = useState<Set<string>>(new Set());
+  
+  // Solver state
+  const [solvingForStorm, setSolvingForStorm] = useState<string | null>(null);
+  const [solverError, setSolverError] = useState<{ storm: string; message: string; isWarning?: boolean; actualFlow?: number } | null>(null);
+  
+  // Resizable sidebar state
+  const [sidebarWidth, setSidebarWidth] = useState(320); // Default 320px (w-80)
+  const isResizing = useRef(false);
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  
+  // Sidebar resize handlers
+  const startResize = useCallback((e: React.MouseEvent) => {
+    isResizing.current = true;
+    e.preventDefault();
+    
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing.current) return;
+      
+      // Calculate new width from right edge of window
+      const newWidth = window.innerWidth - e.clientX;
+      // Clamp between 240px and 600px
+      setSidebarWidth(Math.max(240, Math.min(600, newWidth)));
+    };
+    
+    const handleMouseUp = () => {
+      isResizing.current = false;
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+  }, []);
   
   // Detect overlaps
   const overlaps = useMemo(() => detectOverlaps(structures), [structures]);
@@ -328,6 +616,136 @@ export default function OutfallDesigner({ results, pondAreaSqFt, pondInvertEleva
       }
       return next;
     });
+  };
+
+  // Handle solver for a specific storm and structure
+  const handleSolveForStorm = (structureId: string, stormEvent: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent row click
+    
+    const structure = structures.find(s => s.id === structureId);
+    if (!structure) {
+      setSolverError({ 
+        storm: stormEvent, 
+        message: 'Structure not found.' 
+      });
+      return;
+    }
+    
+    // Find the storm data
+    const stormData = summaryData.find(d => d.res.stormEvent === stormEvent);
+    if (!stormData) {
+      setSolverError({ 
+        storm: stormEvent, 
+        message: 'Storm data not found.' 
+      });
+      return;
+    }
+    
+    const totalAllowable = stormData.res.allowableReleaseRateCfs;
+    if (totalAllowable <= 0) {
+      setSolverError({ 
+        storm: stormEvent, 
+        message: 'Target discharge must be positive.' 
+      });
+      return;
+    }
+    
+    // Calculate discharge from ALL OTHER structures at this WSE
+    // These are already set and will contribute to the total discharge
+    const otherStructures = structures.filter(s => s.id !== structureId);
+    let otherStructuresDischarge = 0;
+    for (const otherStructure of otherStructures) {
+      const result = getStructureDischarge(otherStructure, stormData.wse);
+      otherStructuresDischarge += result.dischargeCfs;
+    }
+    
+    // The target for THIS structure is: allowable - other structures' discharge
+    const remainingAllowable = totalAllowable - otherStructuresDischarge;
+    
+    if (remainingAllowable <= 0) {
+      setSolverError({ 
+        storm: stormEvent, 
+        message: `Other stages already discharge ${otherStructuresDischarge.toFixed(2)} cfs, which meets or exceeds the allowable of ${totalAllowable.toFixed(2)} cfs. No additional discharge needed from this stage.`
+      });
+      return;
+    }
+    
+    setSolvingForStorm(`${structureId}-${stormEvent}`);
+    setSolverError(null);
+    
+    // Solve for structure size to achieve the REMAINING allowable
+    // Pass pond invert elevation so solver can check vertical plate constraints
+    const result = solveStructureSize(
+      structure,
+      remainingAllowable,
+      stormData.wse,
+      plateSize.width,
+      plateSize.height,
+      pondInvertElevation // Plate bottom elevation
+    );
+    
+    setSolvingForStorm(null);
+    
+    // If solver completely failed (no dimensions returned), show error
+    if (!result.success && !result.dimensions) {
+      setSolverError({ 
+        storm: stormEvent, 
+        message: result.error || 'Solution not found' 
+      });
+      return;
+    }
+    
+    // Update the structure with solved dimensions (whether full or partial solution)
+    if (result.dimensions) {
+      setStructures(structures.map(s => {
+        if (s.id !== structureId) return s;
+        
+        const updated: OutfallStructure = { ...s };
+        
+        if (s.type === 'circular' && result.dimensions?.diameterFt !== undefined) {
+          updated.diameterFt = result.dimensions.diameterFt;
+        } else if (s.type === 'rectangular') {
+          if (result.dimensions?.widthFt !== undefined) {
+            updated.widthFt = result.dimensions.widthFt;
+          }
+          if (result.dimensions?.heightFt !== undefined) {
+            updated.heightFt = result.dimensions.heightFt;
+          }
+        }
+        
+        return updated;
+      }));
+    }
+    
+    // If it's a partial solution (couldn't meet target exactly), show warning
+    if (result.isPartialSolution && result.warning) {
+      // Calculate total discharge including solved structure
+      const newTotalDischarge = otherStructuresDischarge + (result.actualDischarge || 0);
+      const contextMsg = otherStructures.length > 0 
+        ? `\n\nOther stages contribute: ${otherStructuresDischarge.toFixed(2)} cfs\nThis stage contributes: ${(result.actualDischarge || 0).toFixed(2)} cfs\nTotal discharge: ${newTotalDischarge.toFixed(2)} cfs (allowable: ${totalAllowable.toFixed(2)} cfs)`
+        : '';
+      
+      setSolverError({ 
+        storm: stormEvent, 
+        message: result.warning + contextMsg,
+        isWarning: true,
+        actualFlow: newTotalDischarge
+      });
+      // Don't auto-dismiss - let user acknowledge
+      return;
+    }
+    
+    // If there's just a general warning message, show it briefly
+    if (result.warning && result.success) {
+      setSolverError({ 
+        storm: stormEvent, 
+        message: result.warning,
+        isWarning: true,
+        actualFlow: result.actualDischarge
+      });
+      // Clear the warning after 5 seconds
+      setTimeout(() => setSolverError(null), 5000);
+    }
   };
 
   // --- Helper: Calculate WSE from Volume ---
@@ -375,9 +793,12 @@ export default function OutfallDesigner({ results, pondAreaSqFt, pondInvertEleva
   // Pre-calculate summary data for all events
   const summaryData = results.map(res => {
     const wse = getWSE(res.requiredStorageCf);
+    const waterDepth = wse - pondInvertElevation;
+    const freeboard = pondTopElevation - wse;
     const { totalDischarge, details } = calculateTotalDischarge(structures, wse);
     const isPassing = totalDischarge <= res.allowableReleaseRateCfs;
-    return { res, wse, totalDischarge, details, isPassing };
+    const hasAdequateFreeboard = freeboard >= 1.0; // Typically 1ft minimum freeboard
+    return { res, wse, waterDepth, freeboard, totalDischarge, details, isPassing, hasAdequateFreeboard };
   });
 
   // Determine which event to show detailed breakdown for (default to first if none selected)
@@ -386,12 +807,24 @@ export default function OutfallDesigner({ results, pondAreaSqFt, pondInvertEleva
     : summaryData[0];
   
   // Prepare WSE List for Visualization
-  const wseVisList = summaryData.map(d => ({
-    label: d.res.stormEvent.toUpperCase(),
-    elevation: d.wse,
-    color: d.res.stormEvent === '100yr' ? '#ef4444' : d.res.stormEvent === '25yr' ? '#facc15' : '#4ade80',
-    isPassing: d.isPassing
-  }));
+  const wseVisList = [
+    // Add pond top elevation line
+    {
+      label: 'TOP',
+      elevation: pondTopElevation,
+      color: '#94a3b8',
+      isPassing: true,
+      isTopLine: true
+    },
+    // Storm water levels
+    ...summaryData.map(d => ({
+      label: d.res.stormEvent.toUpperCase(),
+      elevation: d.wse,
+      color: d.res.stormEvent === '100yr' ? '#ef4444' : d.res.stormEvent === '25yr' ? '#facc15' : '#4ade80',
+      isPassing: d.isPassing && d.hasAdequateFreeboard,
+      isTopLine: false
+    }))
+  ];
 
   return (
     <div className="h-full flex bg-slate-50/50 dark:bg-slate-900/50 overflow-hidden">
@@ -423,300 +856,723 @@ export default function OutfallDesigner({ results, pondAreaSqFt, pondInvertEleva
           </div>
         )}
         
-        {/* 1. Top Summary Row - Design Storms */}
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {summaryData.map((data) => (
-            <button
-                key={data.res.stormEvent}
-                onClick={() => setSelectedDetailEvent(data.res.stormEvent)}
-                className={`relative p-4 rounded-lg border transition-all text-left group ${
-                selectedDetailEvent === data.res.stormEvent 
-                    ? 'ring-2 ring-primary shadow-md' 
-                    : 'hover:shadow-sm opacity-90 hover:opacity-100'
-                } ${
-                data.isPassing 
-                    ? 'bg-emerald-500/10 border-emerald-500/20 hover:bg-emerald-500/20' 
-                    : 'bg-red-500/10 border-red-500/20 hover:bg-red-500/20'
-                }`}
-            >
-                <div className="flex items-center justify-between mb-3">
-                <span className={`text-xs font-bold px-2 py-1 rounded uppercase ${
-                    data.isPassing ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-red-500/20 text-red-600 dark:text-red-400'
-                }`}>
-                    {data.res.stormEvent}
-                </span>
-                {data.isPassing ? (
-                    <CheckCircle className="w-5 h-5 text-emerald-500" />
-                ) : (
-                    <XCircle className="w-5 h-5 text-red-500" />
-                )}
-                </div>
-                
-                <div className="space-y-2">
-                <div className="flex justify-between items-baseline">
-                    <span className="text-xs text-muted-foreground">Target</span>
-                    <span className="text-sm font-medium">{data.res.allowableReleaseRateCfs.toFixed(2)} cfs</span>
-                </div>
-                <div className="flex justify-between items-baseline">
-                    <span className="text-xs text-muted-foreground">Actual</span>
-                    <span className={`text-lg font-bold font-mono ${data.isPassing ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                    {data.totalDischarge.toFixed(2)} cfs
-                    </span>
-                </div>
-                <div className="pt-2 mt-2 border-t border-border/30 flex justify-between text-xs text-muted-foreground">
-                    <span>WSE: {data.wse.toFixed(2)} ft</span>
-                    <span className="text-[10px] opacity-70">Click for details</span>
-                </div>
-                </div>
-            </button>
-            ))}
+        {/* 1. Pond Design Summary */}
+        <section className="bg-card border border-border rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-4">
+            <Waves className="w-5 h-5 text-primary" />
+            <h3 className="font-semibold">Design Storm Water Levels</h3>
+            <div className="ml-auto text-xs text-muted-foreground">
+              Pond Top: <span className="font-mono font-medium text-foreground">{pondTopElevation.toFixed(2)} ft</span>
+            </div>
+          </div>
+          
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 text-left rounded-tl-md">Storm</th>
+                  <th className="px-3 py-2 text-right">WSE (ft)</th>
+                  <th className="px-3 py-2 text-right">Water Depth (ft)</th>
+                  <th className="px-3 py-2 text-right">Freeboard (ft)</th>
+                  <th className="px-3 py-2 text-right">Allowable Q (cfs)</th>
+                  <th className="px-3 py-2 text-right">Actual Q (cfs)</th>
+                  <th className="px-3 py-2 text-center rounded-tr-md">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {summaryData.map((data) => {
+                  const overallPass = data.isPassing && data.hasAdequateFreeboard;
+                  return (
+                    <tr 
+                      key={data.res.stormEvent} 
+                      onClick={() => setSelectedDetailEvent(data.res.stormEvent)}
+                      className={`cursor-pointer transition-colors hover:bg-muted/30 ${
+                        selectedDetailEvent === data.res.stormEvent ? 'bg-primary/10' : ''
+                      }`}
+                    >
+                      <td className="px-3 py-3">
+                        <span className={`text-xs font-bold px-2 py-1 rounded uppercase ${
+                          overallPass 
+                            ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' 
+                            : 'bg-red-500/20 text-red-600 dark:text-red-400'
+                        }`}>
+                          {data.res.stormEvent}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-right font-mono">{data.wse.toFixed(2)}</td>
+                      <td className="px-3 py-3 text-right font-mono text-primary">{data.waterDepth.toFixed(2)}</td>
+                      <td className={`px-3 py-3 text-right font-mono font-medium ${
+                        data.hasAdequateFreeboard ? 'text-emerald-500' : 'text-red-500'
+                      }`}>
+                        {data.freeboard.toFixed(2)}
+                      </td>
+                      <td className="px-3 py-3 text-right font-mono text-muted-foreground">
+                        {data.res.allowableReleaseRateCfs.toFixed(2)}
+                      </td>
+                      <td className={`px-3 py-3 text-right font-mono font-medium ${
+                        data.isPassing ? 'text-emerald-500' : 'text-red-500'
+                      }`}>
+                        {data.totalDischarge.toFixed(2)}
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          {data.isPassing ? (
+                            <CheckCircle className="w-4 h-4 text-emerald-500" />
+                          ) : (
+                            <XCircle className="w-4 h-4 text-red-500" />
+                          )}
+                          {!data.hasAdequateFreeboard && (
+                            <AlertTriangle className="w-4 h-4 text-amber-500" title="Insufficient freeboard" />
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          
+          {/* Freeboard Note */}
+          <div className="mt-3 pt-3 border-t border-border/50 flex items-start gap-2 text-xs text-muted-foreground">
+            <Droplets className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <div>
+              <span className="font-medium">Freeboard</span> is the distance from the water surface to the top of the pond. 
+              Minimum recommended freeboard is <span className="font-mono font-medium text-foreground">1.0 ft</span>.
+              {summaryData.some(d => !d.hasAdequateFreeboard) && (
+                <span className="text-amber-500 ml-1">⚠ Some storms have insufficient freeboard.</span>
+              )}
+            </div>
+          </div>
         </section>
 
-        <div className="grid lg:grid-cols-4 gap-6 items-start">
-            
-            {/* 2. Structure Editor (Left Column) */}
-            <section className="lg:col-span-3 bg-card border border-border rounded-lg shadow-sm p-4">
-            <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold flex items-center gap-2">
-                <SettingsIcon className="w-5 h-5 text-primary" />
-                Outfall Structures
-                </h3>
-                <button 
-                onClick={addStructure}
-                className="flex items-center gap-1 text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded hover:bg-primary/90 transition-colors"
-                >
-                <Plus className="w-3 h-3" /> Add Stage
-                </button>
-            </div>
+        {/* 2. Combined Structure Editor & Calculation Details */}
+        <section className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
+          {/* Header */}
+          <div className="flex items-center justify-between p-4 border-b border-border bg-muted/20">
+            <h3 className="text-lg font-semibold flex items-center gap-2">
+              <SettingsIcon className="w-5 h-5 text-primary" />
+              Outfall Structures
+            </h3>
+            <button 
+              onClick={addStructure}
+              className="flex items-center gap-1 text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded hover:bg-primary/90 transition-colors"
+            >
+              <Plus className="w-3 h-3" /> Add Stage
+            </button>
+          </div>
 
-            <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left">
-                <thead className="bg-muted text-muted-foreground">
-                    <tr>
-                    <th className="p-2 rounded-tl-md">Invert El. (ft)</th>
-                    <th className="p-2">Horiz. Offset (ft)<br/><span className="text-[10px] text-gray-400">0=center, -left, +right</span></th>
-                    <th className="p-2">Type</th>
-                    <th className="p-2">Dimensions (ft)</th>
-                    <th className="p-2">Coeff (C)</th>
-                    <th className="p-2 rounded-tr-md w-10"></th>
-                    </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                    {structures.map((s) => (
-                    <tr key={s.id} className={`group hover:bg-muted/50 ${overlaps.some(o => o.structures.includes(s.id)) ? 'bg-red-500/5' : ''}`}>
-                        <td className="p-2">
-                        <input 
-                            type="number" step="0.1"
-                            value={s.invertElevation}
-                            onChange={e => updateStructure(s.id, 'invertElevation', parseFloat(e.target.value) || 0)}
-                            className="w-20 bg-background border border-input rounded px-2 py-1 focus:ring-1 focus:ring-primary outline-none"
-                        />
+          {/* Structure Table with Integrated Calculations */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-muted/50 text-muted-foreground text-xs uppercase">
+                <tr>
+                  <th className="p-3 text-left">Stage</th>
+                  <th className="p-3 text-left">Invert El. (ft)</th>
+                  <th className="p-3 text-left">Offset (ft)</th>
+                  <th className="p-3 text-left">Type</th>
+                  <th className="p-3 text-left">Dimensions</th>
+                  <th className="p-3 text-left">Coeff</th>
+                  {/* Dynamic columns for each storm's Q */}
+                  {summaryData.map(d => (
+                    <th key={d.res.stormEvent} className="p-3 text-center">
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${
+                        d.isPassing ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'
+                      }`}>
+                        Q<sub>{d.res.stormEvent}</sub>
+                      </span>
+                    </th>
+                  ))}
+                  <th className="p-3 w-10"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {structures.map((s) => {
+                  // Get discharge for this structure for each storm
+                  const structureDischarges = summaryData.map(d => {
+                    const detail = d.details.find(det => det.id === s.id);
+                    return {
+                      stormEvent: d.res.stormEvent,
+                      discharge: detail?.result.dischargeCfs ?? 0,
+                      flowType: detail?.result.flowType ?? 'none'
+                    };
+                  });
+                  
+                  return (
+                    <React.Fragment key={s.id}>
+                      <tr 
+                        className={`group hover:bg-muted/30 cursor-pointer transition-all ${
+                          overlaps.some(o => o.structures.includes(s.id)) ? 'bg-red-500/5' : ''
+                        } ${
+                          expandedDerivations.has(s.id) 
+                            ? 'bg-primary/10 outline outline-2 outline-primary outline-offset-[-2px]' 
+                            : ''
+                        }`}
+                        onClick={() => toggleDerivation(s.id)}
+                      >
+                        <td className="p-3 text-left">
+                          <div className="flex items-center gap-2">
+                            {expandedDerivations.has(s.id) ? (
+                              <ChevronUp className="w-4 h-4 text-primary" />
+                            ) : (
+                              <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                            )}
+                            <span className="font-bold text-foreground">#{s.id}</span>
+                          </div>
                         </td>
-                        <td className="p-2">
-                        <input 
-                            type="number" step="0.1"
-                            value={s.horizontalOffsetFt || 0}
-                            onChange={e => updateStructure(s.id, 'horizontalOffsetFt', parseFloat(e.target.value) || 0)}
-                            className="w-20 bg-background border border-input rounded px-2 py-1 focus:ring-1 focus:ring-primary outline-none"
-                        />
+                        <td className="p-3 text-left" onClick={e => e.stopPropagation()}>
+                          <div className="flex items-center gap-1">
+                            <div className="flex flex-col w-20">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  updateStructure(s.id, 'invertElevation', (s.invertElevation || 0) + 0.01);
+                                }}
+                                className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
+                              >
+                                <ChevronUpIcon className="w-3 h-3 text-gray-400" />
+                              </button>
+                              <input 
+                                type="text"
+                                inputMode="decimal"
+                                defaultValue={(s.invertElevation || 0).toFixed(2)}
+                                key={`invert-${s.id}-${s.invertElevation}`}
+                                onBlur={e => {
+                                  const value = parseFloat(e.target.value);
+                                  if (!isNaN(value)) {
+                                    updateStructure(s.id, 'invertElevation', roundToPrecision(value));
+                                  }
+                                  e.target.value = (s.invertElevation || 0).toFixed(2);
+                                }}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') {
+                                    e.currentTarget.blur();
+                                  }
+                                }}
+                                className="w-20 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                              />
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  updateStructure(s.id, 'invertElevation', (s.invertElevation || 0) - 0.01);
+                                }}
+                                className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
+                              >
+                                <ChevronDownIcon className="w-3 h-3 text-gray-400" />
+                              </button>
+                            </div>
+                            <div className="flex flex-col gap-0.5">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  // Find the previous structure (by ID or index)
+                                  const currentIndex = structures.findIndex(st => st.id === s.id);
+                                  if (currentIndex > 0) {
+                                    const prevStructure = structures[currentIndex - 1];
+                                    // Get the top of the previous structure
+                                    let prevTop = prevStructure.invertElevation;
+                                    if (prevStructure.type === 'circular') {
+                                      prevTop += (prevStructure.diameterFt || 0);
+                                    } else {
+                                      prevTop += (prevStructure.heightFt || 0);
+                                    }
+                                    // Set this structure's invert to prevTop + offset
+                                    const offset = getOrificeStackingOffset();
+                                    updateStructure(s.id, 'invertElevation', roundToPrecision(prevTop + offset));
+                                  }
+                                }}
+                                disabled={structures.findIndex(st => st.id === s.id) === 0}
+                                className="p-1 rounded hover:bg-primary/20 text-muted-foreground hover:text-primary transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                title={`Stack above previous orifice (+${getOrificeStackingOffset().toFixed(2)} ft offset)`}
+                              >
+                                <Layers className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  updateStructure(s.id, 'invertElevation', pondInvertElevation);
+                                }}
+                                className="p-1 rounded hover:bg-primary/20 text-muted-foreground hover:text-primary transition-colors"
+                                title={`Set to pond bottom (${pondInvertElevation.toFixed(2)} ft)`}
+                              >
+                                <ArrowDownToLine className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
                         </td>
-                        <td className="p-2">
-                        <select 
+                        <td className="p-3 text-left" onClick={e => e.stopPropagation()}>
+                          <div className="flex flex-col w-16">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                updateStructure(s.id, 'horizontalOffsetFt', (s.horizontalOffsetFt || 0) + 0.01);
+                              }}
+                              className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
+                            >
+                              <ChevronUpIcon className="w-3 h-3 text-gray-400" />
+                            </button>
+                            <input 
+                              type="text"
+                              inputMode="decimal"
+                              defaultValue={(s.horizontalOffsetFt || 0).toFixed(2)}
+                              key={`offset-${s.id}-${s.horizontalOffsetFt}`}
+                              onBlur={e => {
+                                const value = parseFloat(e.target.value);
+                                if (!isNaN(value)) {
+                                  updateStructure(s.id, 'horizontalOffsetFt', roundToPrecision(value));
+                                }
+                                e.target.value = (s.horizontalOffsetFt || 0).toFixed(2);
+                              }}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  e.currentTarget.blur();
+                                }
+                              }}
+                              className="w-16 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                            />
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                updateStructure(s.id, 'horizontalOffsetFt', (s.horizontalOffsetFt || 0) - 0.01);
+                              }}
+                              className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
+                            >
+                              <ChevronDownIcon className="w-3 h-3 text-gray-400" />
+                            </button>
+                          </div>
+                        </td>
+                        <td className="p-3 text-left" onClick={e => e.stopPropagation()}>
+                          <select 
                             value={s.type}
                             onChange={e => updateStructure(s.id, 'type', e.target.value as OutfallStructureType)}
-                            className="bg-background border border-input rounded px-2 py-1 focus:ring-1 focus:ring-primary outline-none"
-                        >
-                            <option value="circular">Circular (Orifice)</option>
-                            <option value="rectangular">Rectangular (Weir/Orifice)</option>
-                        </select>
+                            className="bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none"
+                          >
+                            <option value="circular">Circular</option>
+                            <option value="rectangular">Rectangular</option>
+                          </select>
                         </td>
-                        <td className="p-2">
-                        <div className="flex gap-2">
+                        <td className="p-3 text-left" onClick={e => e.stopPropagation()}>
+                          <div className="flex gap-2 items-center">
                             {s.type === 'circular' ? (
-                            <div className="flex items-center gap-1">
-                                <span className="text-xs text-gray-400">Dia:</span>
-                                <input 
-                                type="number" step="0.1"
-                                value={s.diameterFt || 0}
-                                onChange={e => updateStructure(s.id, 'diameterFt', parseFloat(e.target.value) || 0)}
-                                className="w-16 bg-background border border-input rounded px-2 py-1 focus:ring-1 focus:ring-primary outline-none"
-                            />
-                            </div>
+                              <div className="flex items-center gap-1">
+                                <span className="text-xs text-gray-400">⌀</span>
+                                <div className="flex flex-col w-14">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      updateStructure(s.id, 'diameterFt', Math.max(0.01, (s.diameterFt || 0) + 0.01));
+                                    }}
+                                    className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
+                                  >
+                                    <ChevronUpIcon className="w-3 h-3 text-gray-400" />
+                                  </button>
+                                  <input 
+                                    type="text"
+                                    inputMode="decimal"
+                                    defaultValue={(s.diameterFt || 0).toFixed(2)}
+                                    key={`dia-${s.id}-${s.diameterFt}`}
+                                    onBlur={e => {
+                                      const value = parseFloat(e.target.value);
+                                      if (!isNaN(value) && value >= 0) {
+                                        updateStructure(s.id, 'diameterFt', roundToPrecision(Math.max(0.01, value)));
+                                      }
+                                      e.target.value = (s.diameterFt || 0).toFixed(2);
+                                    }}
+                                    onKeyDown={e => {
+                                      if (e.key === 'Enter') {
+                                        e.currentTarget.blur();
+                                      }
+                                    }}
+                                    className="w-14 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      updateStructure(s.id, 'diameterFt', Math.max(0.01, (s.diameterFt || 0) - 0.01));
+                                    }}
+                                    className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
+                                  >
+                                    <ChevronDownIcon className="w-3 h-3 text-gray-400" />
+                                  </button>
+                                </div>
+                                <span className="text-xs text-gray-500">ft</span>
+                              </div>
                             ) : (
-                            <>
-                                <div className="flex items-center gap-1">
-                                <span className="text-xs text-gray-400">W:</span>
-                                <input 
-                                    type="number" step="0.1"
-                                    value={s.widthFt || 0}
-                                    onChange={e => updateStructure(s.id, 'widthFt', parseFloat(e.target.value) || 0)}
-                                    className="w-14 bg-background border border-input rounded px-2 py-1 focus:ring-1 focus:ring-primary outline-none"
-                                />
+                              <>
+                                <div className="flex flex-col w-12">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      updateStructure(s.id, 'widthFt', Math.max(0.01, (s.widthFt || 0) + 0.01));
+                                    }}
+                                    className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
+                                  >
+                                    <ChevronUpIcon className="w-3 h-3 text-gray-400" />
+                                  </button>
+                                  <input 
+                                    type="text"
+                                    inputMode="decimal"
+                                    defaultValue={(s.widthFt || 0).toFixed(2)}
+                                    key={`width-${s.id}-${s.widthFt}`}
+                                    onBlur={e => {
+                                      const value = parseFloat(e.target.value);
+                                      if (!isNaN(value) && value >= 0) {
+                                        updateStructure(s.id, 'widthFt', roundToPrecision(Math.max(0.01, value)));
+                                      }
+                                      e.target.value = (s.widthFt || 0).toFixed(2);
+                                    }}
+                                    onKeyDown={e => {
+                                      if (e.key === 'Enter') {
+                                        e.currentTarget.blur();
+                                      }
+                                    }}
+                                    className="w-12 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                                    placeholder="W"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      updateStructure(s.id, 'widthFt', Math.max(0.01, (s.widthFt || 0) - 0.01));
+                                    }}
+                                    className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
+                                  >
+                                    <ChevronDownIcon className="w-3 h-3 text-gray-400" />
+                                  </button>
                                 </div>
-                                <div className="flex items-center gap-1">
-                                <span className="text-xs text-gray-400">H:</span>
-                                <input 
-                                    type="number" step="0.1"
-                                    value={s.heightFt || 0}
-                                    onChange={e => updateStructure(s.id, 'heightFt', parseFloat(e.target.value) || 0)}
-                                    className="w-14 bg-background border border-input rounded px-2 py-1 focus:ring-1 focus:ring-primary outline-none"
-                                />
+                                <span className="text-gray-500">×</span>
+                                <div className="flex flex-col w-12">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      updateStructure(s.id, 'heightFt', Math.max(0.01, (s.heightFt || 0) + 0.01));
+                                    }}
+                                    className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
+                                  >
+                                    <ChevronUpIcon className="w-3 h-3 text-gray-400" />
+                                  </button>
+                                  <input 
+                                    type="text"
+                                    inputMode="decimal"
+                                    defaultValue={(s.heightFt || 0).toFixed(2)}
+                                    key={`height-${s.id}-${s.heightFt}`}
+                                    onBlur={e => {
+                                      const value = parseFloat(e.target.value);
+                                      if (!isNaN(value) && value >= 0) {
+                                        updateStructure(s.id, 'heightFt', roundToPrecision(Math.max(0.01, value)));
+                                      }
+                                      e.target.value = (s.heightFt || 0).toFixed(2);
+                                    }}
+                                    onKeyDown={e => {
+                                      if (e.key === 'Enter') {
+                                        e.currentTarget.blur();
+                                      }
+                                    }}
+                                    className="w-12 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                                    placeholder="H"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      updateStructure(s.id, 'heightFt', Math.max(0.01, (s.heightFt || 0) - 0.01));
+                                    }}
+                                    className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
+                                  >
+                                    <ChevronDownIcon className="w-3 h-3 text-gray-400" />
+                                  </button>
                                 </div>
-                            </>
+                                <span className="text-xs text-gray-500">ft</span>
+                              </>
                             )}
-                        </div>
+                          </div>
                         </td>
-                        <td className="p-2">
-                        <input 
-                            type="number" step="0.01"
-                            value={s.dischargeCoefficient}
-                            onChange={e => updateStructure(s.id, 'dischargeCoefficient', parseFloat(e.target.value) || 0)}
-                            className="w-16 bg-background border border-input rounded px-2 py-1 focus:ring-1 focus:ring-primary outline-none"
-                        />
+                        <td className="p-3 text-left" onClick={e => e.stopPropagation()}>
+                          <div className="flex flex-col w-14">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                updateStructure(s.id, 'dischargeCoefficient', Math.max(0, (s.dischargeCoefficient || 0) + 0.01));
+                              }}
+                              className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
+                            >
+                              <ChevronUpIcon className="w-3 h-3 text-gray-400" />
+                            </button>
+                            <input 
+                              type="text"
+                              inputMode="decimal"
+                              defaultValue={(s.dischargeCoefficient || 0).toFixed(2)}
+                              key={`coeff-${s.id}-${s.dischargeCoefficient}`}
+                              onBlur={e => {
+                                const value = parseFloat(e.target.value);
+                                if (!isNaN(value) && value >= 0) {
+                                  updateStructure(s.id, 'dischargeCoefficient', roundToPrecision(Math.max(0.01, value)));
+                                }
+                                e.target.value = (s.dischargeCoefficient || 0).toFixed(2);
+                              }}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  e.currentTarget.blur();
+                                }
+                              }}
+                              className="w-14 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                            />
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                updateStructure(s.id, 'dischargeCoefficient', Math.max(0, (s.dischargeCoefficient || 0) - 0.01));
+                              }}
+                              className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
+                            >
+                              <ChevronDownIcon className="w-3 h-3 text-gray-400" />
+                            </button>
+                          </div>
                         </td>
-                        <td className="p-2 text-right">
-                        <button 
+                        {/* Discharge values for each storm */}
+                        {structureDischarges.map(sd => (
+                          <td key={sd.stormEvent} className="p-3 text-center">
+                            {sd.discharge > 0 ? (
+                              <div className="flex flex-col items-center">
+                                <span className="font-mono font-medium text-foreground">{sd.discharge.toFixed(2)}</span>
+                                <span className="text-[10px] text-gray-500 capitalize">{sd.flowType}</span>
+                              </div>
+                            ) : (
+                              <span className="text-gray-500 text-xs">—</span>
+                            )}
+                          </td>
+                        ))}
+                        <td className="p-3 text-right" onClick={e => e.stopPropagation()}>
+                          <button 
                             onClick={() => removeStructure(s.id)}
                             className="text-muted-foreground hover:text-destructive transition-colors p-1"
-                        >
+                          >
                             <Trash2 className="w-4 h-4" />
-                        </button>
+                          </button>
                         </td>
-                    </tr>
-                    ))}
-                </tbody>
-                </table>
-                {structures.length === 0 && (
-                <div className="p-8 text-center text-muted-foreground text-sm">
-                    No structures defined. Add a stage to begin.
-                </div>
-                )}
-            </div>
-            </section>
-
-            {/* 3. Detail View (Right Column) */}
-            {detailView && (
-            <section className="lg:col-span-1 bg-card border border-border rounded-lg shadow-sm overflow-hidden">
-                <div className="bg-muted/30 p-3 border-b border-border">
-                <h3 className="font-semibold flex items-center gap-2 text-sm">
-                    <CalculatorIcon className="w-4 h-4 text-primary" />
-                    Detailed Breakdown: <span className="uppercase">{detailView.res.stormEvent}</span>
-                </h3>
-                </div>
-                
-                <div className="p-4">
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Calculation Details</p>
-                    
-                    {detailView.details.length > 0 ? (
-                    <div className="space-y-3">
-                        {detailView.details.map((d) => (
-                        <div key={d.id} className="bg-muted/30 rounded-md border border-border/50 p-3 text-xs">
-                            <div className="flex justify-between items-center mb-2 pb-2 border-b border-border/30">
-                            <span className="font-bold text-foreground">Stage {d.id}</span>
-                            <span className="bg-background px-2 py-0.5 rounded text-[10px] border border-border capitalize">{d.result.flowType}</span>
-                            </div>
-                            
-                            <div className="mb-2 pb-2 border-b border-border/30">
-                            <div className="text-muted-foreground text-[10px] mb-1">Discharge (Q):</div>
-                            <div className="font-mono font-medium text-foreground text-sm">{d.result.dischargeCfs.toFixed(2)} <span className="text-[10px] text-gray-500">cfs</span></div>
-                            </div>
-                            
-                            <div className="bg-background p-2 rounded border border-border/50 font-mono text-[10px] text-muted-foreground break-all mb-2">
-                            {d.result.formula}
-                            </div>
-                            
-                            {/* Variable definitions with units and common names - Table format for alignment */}
-                            <div className="mt-2">
-                                <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5">Variables</div>
-                                <table className="w-full text-[10px]">
-                                    <tbody>
-                                        {Object.entries(d.result.variables).map(([k, v]) => {
-                                            // Map variable names to common names and units
-                                            const varInfo: Record<string, { name: string; unit: string }> = {
-                                                'C': { name: 'Discharge Coefficient', unit: '' },
-                                                'A': { name: 'Area', unit: 'ft²' },
-                                                'g': { name: 'Gravity', unit: 'ft/s²' },
-                                                'h': { name: 'Head', unit: 'ft' },
-                                                'H': { name: 'Head', unit: 'ft' },
-                                                'L': { name: 'Length', unit: 'ft' },
-                                                'WSE': { name: 'Water Surface Elevation', unit: 'ft' },
-                                                'Invert': { name: 'Invert Elevation', unit: 'ft' },
-                                                'headFt': { name: 'Head', unit: 'ft' }
-                                            };
-                                            
-                                            const info = varInfo[k] || { name: k, unit: '' };
-                                            const displayName = varInfo[k] ? `${k} (${info.name})` : k;
-                                            
-                                            return (
-                                                <tr key={k} className="border-b border-border/30">
-                                                    <td className="py-0.5 pr-4 text-muted-foreground font-medium align-top">
-                                                        {displayName}:
-                                                    </td>
-                                                    <td className="py-0.5 pr-2 text-right font-mono text-foreground align-top whitespace-nowrap">
-                                                        {typeof v === 'number' ? v.toFixed(4) : v}
-                                                    </td>
-                                                    <td className="py-0.5 text-left font-mono text-[9px] text-gray-500 align-top w-12">
-                                                        {info.unit}
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
+                      </tr>
+                      
+                      {/* Expandable calculation details row */}
+                      {expandedDerivations.has(s.id) && detailView && (
+                        <tr className="bg-muted/20">
+                          <td colSpan={7 + summaryData.length} className="p-4">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                              {summaryData.map(d => {
+                                const detail = d.details.find(det => det.id === s.id);
+                                if (!detail || detail.result.dischargeCfs === 0) return null;
                                 
-                                {/* Derivations - Show intermediate calculations (Collapsible) */}
-                                {d.result.derivations && d.result.derivations.length > 0 && (
-                                    <div className="mt-3 pt-2 border-t border-border/50">
+                                const solverKey = `${s.id}-${d.res.stormEvent}`;
+                                const isSolving = solvingForStorm === solverKey;
+                                
+                                return (
+                                  <div key={d.res.stormEvent} className="bg-background rounded-lg border border-border p-3">
+                                    <div className="flex items-center justify-between mb-2">
+                                      <div className="flex items-center gap-2">
+                                        <span className={`text-xs font-bold px-2 py-0.5 rounded uppercase ${
+                                          d.isPassing ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'
+                                        }`}>
+                                          {d.res.stormEvent}
+                                        </span>
                                         <button
-                                            onClick={() => toggleDerivation(d.id)}
-                                            className="w-full flex items-center justify-between text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1.5 hover:text-gray-300 transition-colors"
+                                          onClick={(e) => handleSolveForStorm(s.id, d.res.stormEvent, e)}
+                                          disabled={solvingForStorm !== null}
+                                          className={`p-1 rounded transition-colors ${
+                                            isSolving
+                                              ? 'text-primary'
+                                              : 'text-gray-400 hover:text-primary hover:bg-primary/10'
+                                          } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                          title={`Solve structure size for ${d.res.stormEvent} storm`}
                                         >
-                                            <span>Intermediate Calculations</span>
-                                            {expandedDerivations.has(d.id) ? (
-                                                <ChevronUp className="w-3 h-3" />
-                                            ) : (
-                                                <ChevronDown className="w-3 h-3" />
-                                            )}
+                                          {isSolving ? (
+                                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                          ) : (
+                                            <Sparkles className="w-3.5 h-3.5" />
+                                          )}
                                         </button>
-                                        {expandedDerivations.has(d.id) && (
-                                            <div className="space-y-1.5 animate-in slide-in-from-top-2 duration-200">
-                                                {d.result.derivations.map((deriv, idx) => (
-                                                    <div key={idx} className="text-[9px] text-gray-400/80 font-mono">
-                                                        <div className="flex items-start gap-2">
-                                                            <span className="text-gray-500 font-medium min-w-[60px]">{deriv.variable}:</span>
-                                                            <span className="flex-1 text-gray-400">{deriv.calculation}</span>
-                                                            <span className="text-gray-500 min-w-[40px] text-right">{deriv.value.toFixed(4)} {deriv.unit}</span>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
+                                      </div>
+                                      <span className="text-xs text-gray-400 capitalize">{detail.result.flowType}</span>
                                     </div>
-                                )}
+                                    <div className="font-mono text-[10px] text-muted-foreground bg-muted/50 p-2 rounded mb-2">
+                                      {detail.result.formula}
+                                    </div>
+                                    <div className="text-xs space-y-1">
+                                      {Object.entries(detail.result.variables).slice(0, 4).map(([k, v]) => (
+                                        <div key={k} className="flex justify-between">
+                                          <span className="text-gray-400">{k}:</span>
+                                          <span className="font-mono">{typeof v === 'number' ? v.toFixed(3) : v}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                );
+                              })}
                             </div>
-                        </div>
-                        ))}
-                    </div>
-                    ) : (
-                    <div className="p-4 text-center text-muted-foreground text-xs italic">
-                        No active discharge stages for this event.
-                    </div>
-                    )}
-                </div>
-            </section>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+                
+                {/* Totals Row */}
+                {structures.length > 0 && (
+                  <tr className="bg-muted/30 font-medium">
+                    <td colSpan={6} className="p-3 text-right text-muted-foreground uppercase text-xs">
+                      Total Discharge →
+                    </td>
+                    {summaryData.map(d => (
+                      <td key={d.res.stormEvent} className="p-3 text-center">
+                        <span className={`font-mono font-bold ${d.isPassing ? 'text-emerald-500' : 'text-red-500'}`}>
+                          {d.totalDischarge.toFixed(2)}
+                        </span>
+                        <span className="text-xs text-gray-500 ml-1">cfs</span>
+                      </td>
+                    ))}
+                    <td></td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+            
+            {structures.length === 0 && (
+              <div className="p-8 text-center text-muted-foreground text-sm">
+                No structures defined. Add a stage to begin.
+              </div>
             )}
-        </div>
+          </div>
+          
+          {/* Expand/Collapse Details Toggle */}
+          {structures.length > 0 && (
+            <div className="p-3 border-t border-border bg-muted/10 flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">
+                Click a structure row to expand calculation details
+              </span>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    const allIds = new Set(structures.map(s => s.id));
+                    setExpandedDerivations(allIds);
+                  }}
+                  className="text-xs text-primary hover:underline"
+                >
+                  Expand All
+                </button>
+                <span className="text-gray-500">|</span>
+                <button
+                  onClick={() => setExpandedDerivations(new Set())}
+                  className="text-xs text-primary hover:underline"
+                >
+                  Collapse All
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
       </div>
 
-      {/* Right Sidebar - Profile Visualization */}
-      <div className="w-80 bg-card border-l border-border z-10 hidden xl:block">
+      {/* Right Sidebar - Profile Visualization (Resizable) */}
+      <div 
+        ref={sidebarRef}
+        style={{ width: sidebarWidth }}
+        className="bg-card border-l border-border z-10 hidden xl:flex relative"
+      >
+        {/* Resize Handle */}
+        <div
+          onMouseDown={startResize}
+          className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-primary/20 transition-colors flex items-center justify-center group z-20"
+          title="Drag to resize"
+        >
+          <GripVertical className="w-3 h-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
+        
+        <div className="flex-1 pl-2">
           <OutfallProfile 
             structures={structures} 
             pondInvert={pondInvertElevation} 
             wseList={wseVisList}
             overlaps={overlaps}
+            outfallStyle={outfallStyle}
+            plateSize={plateSize}
+            onStyleChange={setOutfallStyle}
+            onPlateSizeChange={setPlateSize}
           />
+        </div>
       </div>
+
+      {/* Solver Error/Warning Modal */}
+      {solverError && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className={`bg-card border rounded-lg shadow-xl max-w-md w-full p-6 ${
+            solverError.isWarning ? 'border-amber-500/50' : 'border-red-500/50'
+          }`}>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className={`w-5 h-5 ${solverError.isWarning ? 'text-amber-500' : 'text-red-500'}`} />
+                <h3 className="text-lg font-semibold">
+                  {solverError.isWarning ? 'Partial Solution Applied' : 'Solution Not Found'}
+                </h3>
+              </div>
+              <button
+                onClick={() => setSolverError(null)}
+                className="p-1 hover:bg-background rounded transition-colors"
+              >
+                <X className="w-4 h-4 text-gray-400" />
+              </button>
+            </div>
+            <div className="mb-4">
+              <p className="text-sm text-gray-300 mb-3">
+                <span className="font-medium">Storm:</span>{' '}
+                <span className={`text-xs font-bold px-2 py-0.5 rounded uppercase ${
+                  solverError.storm === '100yr' 
+                    ? 'bg-red-500/20 text-red-400' 
+                    : solverError.storm === '25yr' 
+                    ? 'bg-yellow-500/20 text-yellow-400' 
+                    : 'bg-green-500/20 text-green-400'
+                }`}>
+                  {solverError.storm}
+                </span>
+              </p>
+              <p className="text-sm text-gray-400">{solverError.message}</p>
+              
+              {/* Show actual flow achieved for partial solutions */}
+              {solverError.isWarning && solverError.actualFlow !== undefined && (
+                <div className="mt-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-amber-400 font-medium">Achieved Flow:</span>
+                    <span className="text-lg font-bold text-amber-300">{solverError.actualFlow.toFixed(2)} cfs</span>
+                  </div>
+                  <p className="text-xs text-amber-400/70 mt-1">
+                    The orifice dimensions have been applied using the maximum achievable size.
+                  </p>
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={() => setSolverError(null)}
+                className={`px-4 py-2 rounded-lg transition-colors ${
+                  solverError.isWarning 
+                    ? 'bg-amber-500 text-black hover:bg-amber-400'
+                    : 'bg-primary text-primary-foreground hover:bg-primary/90'
+                }`}
+              >
+                {solverError.isWarning ? 'Got it' : 'OK'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

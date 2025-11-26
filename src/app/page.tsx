@@ -71,7 +71,10 @@ export default function Home() {
     }
     return { areaAcres: 10, cFactor: 0.85, tcMinutes: 10 };
   }, [drainageTotals]);
-  const pondDims = { length: 100, width: 100, depth: 10 };
+  
+  // Pond dimensions - shared between Pond Designer and Outfall Designer
+  const [pondDims, setPondDims] = useState({ length: 100, width: 100, depth: 10 });
+  const [pondInvertElevation, setPondInvertElevation] = useState(100);
   
   const [pondResults, setPondResults] = useState<ModifiedRationalResult[]>([]);
 
@@ -154,6 +157,8 @@ export default function Home() {
                selectedEvents={selectedEvents} 
                results={pondResults}
                drainageTotals={drainageTotals}
+               pondDims={pondDims}
+               onPondDimsChange={setPondDims}
              />
            </div>
         )}
@@ -161,8 +166,8 @@ export default function Home() {
         {activeTab === 'outfall' && (
            <OutfallDesigner 
              results={pondResults} 
-             pondAreaSqFt={pondAreaSqFt}
-             pondInvertElevation={100}
+             pondDims={pondDims}
+             pondInvertElevation={pondInvertElevation}
            />
         )}
       </main>

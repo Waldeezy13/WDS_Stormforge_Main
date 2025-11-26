@@ -5,13 +5,32 @@ export async function GET() {
   try {
     const db = getDatabase();
     const cities = db.prepare(`
-      SELECT id, name, state, updated_at 
-      FROM cities 
-      ORDER BY state, name
-    `).all() as Array<{ id: number; name: string; state: string; updated_at: string | null }>;
+      SELECT 
+        c.id, 
+        c.name, 
+        c.state, 
+        c.updated_at,
+        COUNT(rd.id) as data_count
+      FROM cities c
+      LEFT JOIN rainfall_data rd ON c.id = rd.city_id
+      GROUP BY c.id, c.name, c.state, c.updated_at
+      ORDER BY c.state, c.name
+    `).all() as Array<{ 
+      id: number; 
+      name: string; 
+      state: string; 
+      updated_at: string | null;
+      data_count: number;
+    }>;
 
     // Group cities by state
-    const citiesByState: Record<string, Array<{ id: number; name: string; state: string; lastUpdated?: string }>> = {};
+    const citiesByState: Record<string, Array<{ 
+      id: number; 
+      name: string; 
+      state: string; 
+      lastUpdated?: string;
+      dataCount: number;
+    }>> = {};
     
     for (const city of cities) {
       if (!citiesByState[city.state]) {
@@ -21,7 +40,8 @@ export async function GET() {
         id: city.id,
         name: city.name,
         state: city.state,
-        lastUpdated: city.updated_at || undefined
+        lastUpdated: city.updated_at || undefined,
+        dataCount: city.data_count
       });
     }
 

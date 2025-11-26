@@ -1,5 +1,6 @@
 import React from 'react';
-import { Droplets, Waves, Construction, CloudRain, Calculator } from 'lucide-react';
+import Link from 'next/link';
+import { Droplets, Waves, Construction, CloudRain, Calculator, Settings } from 'lucide-react';
 
 export type Tab = 'hydrology' | 'pond' | 'drainage' | 'outfall';
 
@@ -18,52 +19,61 @@ export default function Header({ activeTab, onTabChange }: HeaderProps) {
             Waldo Pond <span className="text-accent">Designer</span>
           </h1>
         </div>
-        <nav className="flex gap-6">
-          <button 
-            onClick={() => onTabChange('hydrology')}
-            className={`text-sm font-medium transition-colors flex items-center gap-2 ${
-              activeTab === 'hydrology' 
-                ? 'text-accent' 
-                : 'text-gray-400 hover:text-white'
-            }`}
+        <div className="flex items-center gap-6">
+          <nav className="flex gap-6">
+            <button 
+              onClick={() => onTabChange('hydrology')}
+              className={`text-sm font-medium transition-colors flex items-center gap-2 ${
+                activeTab === 'hydrology' 
+                  ? 'text-accent' 
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <CloudRain className="w-4 h-4" />
+              Hydrology
+            </button>
+            <button 
+              onClick={() => onTabChange('drainage')}
+              className={`text-sm font-medium transition-colors flex items-center gap-2 ${
+                activeTab === 'drainage' 
+                  ? 'text-accent' 
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <Calculator className="w-4 h-4" />
+              Drainage Area
+            </button>
+            <button 
+              onClick={() => onTabChange('pond')}
+              className={`text-sm font-medium transition-colors flex items-center gap-2 ${
+                activeTab === 'pond' 
+                  ? 'text-accent' 
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <Waves className="w-4 h-4" />
+              Pond Design
+            </button>
+            <button 
+              onClick={() => onTabChange('outfall')}
+              className={`text-sm font-medium transition-colors flex items-center gap-2 ${
+                activeTab === 'outfall' 
+                  ? 'text-accent' 
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <Construction className="w-4 h-4" />
+              Outfall Design
+            </button>
+          </nav>
+          <Link
+            href="/settings"
+            className="p-2 hover:bg-background rounded-lg transition-colors"
+            aria-label="Settings"
           >
-            <CloudRain className="w-4 h-4" />
-            Hydrology
-          </button>
-          <button 
-            onClick={() => onTabChange('drainage')}
-            className={`text-sm font-medium transition-colors flex items-center gap-2 ${
-              activeTab === 'drainage' 
-                ? 'text-accent' 
-                : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            <Calculator className="w-4 h-4" />
-            Drainage Area
-          </button>
-          <button 
-            onClick={() => onTabChange('pond')}
-            className={`text-sm font-medium transition-colors flex items-center gap-2 ${
-              activeTab === 'pond' 
-                ? 'text-accent' 
-                : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            <Waves className="w-4 h-4" />
-            Pond Design
-          </button>
-          <button 
-            onClick={() => onTabChange('outfall')}
-            className={`text-sm font-medium transition-colors flex items-center gap-2 ${
-              activeTab === 'outfall' 
-                ? 'text-accent' 
-                : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            <Construction className="w-4 h-4" />
-            Outfall Design
-          </button>
-        </nav>
+            <Settings className="w-5 h-5 text-gray-400 hover:text-white" />
+          </Link>
+        </div>
       </div>
     </header>
   );
