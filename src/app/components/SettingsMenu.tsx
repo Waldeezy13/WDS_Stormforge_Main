@@ -43,7 +43,7 @@ export default function SettingsMenu() {
       // Transform the data to include dataCount
       const transformedData: Record<string, CityWithData[]> = {};
       for (const [state, stateCities] of Object.entries(data)) {
-        transformedData[state] = (stateCities as any[]).map(city => ({
+        transformedData[state] = (stateCities as { dataCount?: number }[]).map(city => ({
           ...city,
           dataCount: city.dataCount || 0
         }));
@@ -79,7 +79,7 @@ export default function SettingsMenu() {
       } else {
         alert('Failed to delete city: ' + (result.error || 'Unknown error'));
       }
-    } catch (error) {
+    } catch (_error) {
       alert('Failed to delete city');
     } finally {
       setDeleting(null);
@@ -109,6 +109,8 @@ export default function SettingsMenu() {
             <button
               onClick={() => setIsOpen(false)}
               className="p-1 hover:bg-background rounded transition-colors"
+              title="Close settings"
+              aria-label="Close settings"
             >
               <X className="w-4 h-4 text-gray-400" />
             </button>

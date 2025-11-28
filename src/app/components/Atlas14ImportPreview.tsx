@@ -10,18 +10,19 @@ interface ParsedData {
   durationMinutes: number;
   returnPeriod: string;
   intensity: number;
+  source?: string;
 }
 
 interface PreviewProps {
   data: ParsedData[];
-  cities: Array<{ city: string; state: string; recordCount: number }>;
+  cities: Array<{ city: string; state: string; source?: string; recordCount: number }>;
   errors?: string[];
   warnings?: string[];
   totalRows: number;
   parsedRows: number;
   detectedHeaders?: string[];
   columnMappings?: Record<string, string>;
-  sampleRows?: Array<{ rowNumber: number; data: any; keys: string[] }>;
+  sampleRows?: Array<{ rowNumber: number; data: Record<string, unknown>; keys: string[] }>;
   onCancel: () => void;
   onSave: () => void;
 }
@@ -35,13 +36,16 @@ export default function Atlas14ImportPreview({
   parsedRows,
   detectedHeaders,
   columnMappings,
-  sampleRows,
   onCancel,
   onSave
 }: PreviewProps) {
   const [editableData, setEditableData] = useState<ParsedData[]>(data);
   const [saving, setSaving] = useState(false);
   const [saveResult, setSaveResult] = useState<{ success: boolean; message: string } | null>(null);
+  
+  // Get initial source from first data row or cities array
+  const initialSource = data[0]?.source || cities[0]?.source || '';
+  const [dataSource, setDataSource] = useState<string>(initialSource);
 
   const updateValue = (index: number, field: keyof ParsedData, value: string | number) => {
     const newData = [...editableData];
@@ -92,7 +96,10 @@ export default function Atlas14ImportPreview({
       const response = await fetch('/api/atlas14/import/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: editableData }),
+        body: JSON.stringify({ 
+          data: editableData,
+          source: dataSource || undefined  // Pass the global source
+        }),
       });
 
       const result = await response.json();
@@ -106,7 +113,7 @@ export default function Atlas14ImportPreview({
       } else {
         setSaveResult({ success: false, message: result.error || 'Failed to save' });
       }
-    } catch (error) {
+    } catch {
       setSaveResult({ success: false, message: 'Failed to save data' });
     } finally {
       setSaving(false);
@@ -140,6 +147,8 @@ export default function Atlas14ImportPreview({
         <button
           onClick={onCancel}
           className="p-2 hover:bg-background rounded-lg transition-colors"
+          title="Close"
+          aria-label="Close"
         >
           <X className="w-5 h-5" />
         </button>
@@ -163,6 +172,20 @@ export default function Atlas14ImportPreview({
         </div>
       </div>
 
+      {/* Data Source */}
+      <div className="mb-4 p-3 bg-background rounded border border-border/50">
+        <label className="block text-sm text-gray-400 mb-2">
+          Data Source <span className="text-gray-500">(optional - e.g., &quot;NOAA Atlas 14&quot;, &quot;City of Dallas&quot;)</span>
+        </label>
+        <input
+          type="text"
+          value={dataSource}
+          onChange={(e) => setDataSource(e.target.value)}
+          placeholder="Enter data source (e.g., NOAA Atlas 14, Municipal Data)"
+          className="w-full bg-slate-900/50 border border-border rounded px-3 py-2 text-sm outline-none focus:border-primary"
+        />
+      </div>
+
       {/* Column Detection Info */}
       {columnMappings && (
         <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/50 rounded text-sm">
@@ -174,8 +197,9 @@ export default function Atlas14ImportPreview({
                 <div><span className="font-medium">City:</span> {columnMappings.city}</div>
                 <div><span className="font-medium">State:</span> {columnMappings.state}</div>
                 <div><span className="font-medium">Duration:</span> {columnMappings.duration}</div>
+                <div><span className="font-medium">Source:</span> {columnMappings.source}</div>
                 <div><span className="font-medium">Return Period:</span> {columnMappings.returnPeriod}</div>
-                <div className="col-span-2"><span className="font-medium">Intensity:</span> {columnMappings.intensity}</div>
+                <div><span className="font-medium">Intensity:</span> {columnMappings.intensity}</div>
               </div>
               {detectedHeaders && (
                 <div className="mt-2 text-xs text-blue-300">
@@ -247,6 +271,8 @@ export default function Atlas14ImportPreview({
                       value={row.city}
                       onChange={(e) => updateValue(idx, 'city', e.target.value)}
                       className="w-full bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-2 py-1 outline-none"
+                      title="City name"
+                      aria-label="City name"
                     />
                   </td>
                   <td className="px-3 py-2">
@@ -256,6 +282,8 @@ export default function Atlas14ImportPreview({
                       onChange={(e) => updateValue(idx, 'state', e.target.value)}
                       className="w-full bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-2 py-1 outline-none uppercase"
                       maxLength={2}
+                      title="State abbreviation"
+                      aria-label="State abbreviation"
                     />
                   </td>
                   <td className="px-3 py-2">
@@ -264,6 +292,8 @@ export default function Atlas14ImportPreview({
                       value={row.durationMinutes}
                       onChange={(e) => updateValue(idx, 'durationMinutes', e.target.value)}
                       className="w-full bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-2 py-1 outline-none text-right font-mono"
+                      title="Duration in minutes"
+                      aria-label="Duration in minutes"
                     />
                   </td>
                   <td className="px-3 py-2">
@@ -271,6 +301,8 @@ export default function Atlas14ImportPreview({
                       value={row.returnPeriod}
                       onChange={(e) => updateValue(idx, 'returnPeriod', e.target.value)}
                       className="w-full bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-2 py-1 outline-none"
+                      title="Return period"
+                      aria-label="Return period"
                     >
                       <option value="2yr">2yr</option>
                       <option value="5yr">5yr</option>
@@ -287,6 +319,8 @@ export default function Atlas14ImportPreview({
                       value={row.intensity}
                       onChange={(e) => updateValue(idx, 'intensity', e.target.value)}
                       className="w-full bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-2 py-1 outline-none text-right font-mono"
+                      title="Rainfall intensity (in/hr)"
+                      aria-label="Rainfall intensity (in/hr)"
                     />
                   </td>
                 </tr>

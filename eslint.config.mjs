@@ -13,6 +13,22 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
   ]),
+  {
+    rules: {
+      // Allow unused variables that start with underscore
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_"
+        }
+      ],
+      // Downgrade setState in effect to warning - these are valid patterns for
+      // loading data from localStorage or initializing derived state
+      "react-hooks/set-state-in-effect": "warn",
+    }
+  }
 ]);
 
 export default eslintConfig;

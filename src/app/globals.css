@@ -23,3 +23,90 @@ body {
   color: var(--foreground);
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
 }
+
+/* Print Styles for Reports */
+@media print {
+  @page {
+    margin: 0.75in;
+    size: letter;
+  }
+  
+  body {
+    background: white !important;
+    color: black !important;
+    font-size: 11pt;
+    line-height: 1.4;
+  }
+  
+  .print\:hidden {
+    display: none !important;
+  }
+  
+  .print\:block {
+    display: block !important;
+  }
+  
+  .print\:border-0 {
+    border: 0 !important;
+  }
+  
+  /* Hide controls and navigation */
+  header, nav, .print\:hidden {
+    display: none !important;
+  }
+  
+  /* Reset backgrounds for clean print */
+  #report-content {
+    background: white !important;
+    color: black !important;
+    padding: 0 !important;
+  }
+  
+  #report-content * {
+    color: black !important;
+    background-color: transparent !important;
+  }
+  
+  /* Table header backgrounds */
+  #report-content .bg-gray-200,
+  #report-content .bg-gray-100,
+  #report-content thead tr {
+    background-color: #e5e5e5 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  
+  /* Keep borders visible */
+  #report-content table {
+    border-collapse: collapse;
+  }
+  
+  #report-content td,
+  #report-content th {
+    border: 1px solid black !important;
+  }
+  
+  /* Avoid page breaks inside sections and tables */
+  section {
+    page-break-inside: avoid;
+  }
+  
+  table {
+    page-break-inside: avoid;
+  }
+  
+  tr {
+    page-break-inside: avoid;
+  }
+  
+  /* Input fields show as plain text */
+  input {
+    border: none !important;
+    background: transparent !important;
+    padding: 0 !important;
+  }
+  
+  input::placeholder {
+    color: transparent !important;
+  }
+}

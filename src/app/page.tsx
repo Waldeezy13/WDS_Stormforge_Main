@@ -6,14 +6,19 @@ import PondDesigner from './components/PondDesigner';
 import Hydrology from './components/Hydrology';
 import Drainage from './components/Drainage';
 import OutfallDesigner from './components/OutfallDesigner';
-import { ReturnPeriod, getCitiesByState, City } from '@/utils/atlas14';
+import Reports from './components/Reports';
+import { ReturnPeriod, getCitiesByState, City, InterpolationMethod } from '@/utils/atlas14';
 import { SiteParams, ModifiedRationalMethod, ModifiedRationalResult } from '@/utils/rationalMethod';
+import { StageStorageCurve } from '@/utils/stageStorage';
+
+export type PondMode = 'generic' | 'custom';
 
 export default function Home() {
   // Global State
   const [activeTab, setActiveTab] = useState<Tab>('hydrology');
   const [cityId, setCityId] = useState<number>(0);
   const [selectedEvents, setSelectedEvents] = useState<ReturnPeriod[]>(['5yr', '25yr', '100yr']);
+  const [interpolationMethod, setInterpolationMethod] = useState<InterpolationMethod>('log-log');
   const [citiesByState, setCitiesByState] = useState<Record<string, City[]>>({});
   const [drainageTotals, setDrainageTotals] = useState<{
     existing: {
@@ -76,6 +81,39 @@ export default function Home() {
   const [pondDims, setPondDims] = useState({ length: 100, width: 100, depth: 10 });
   const [pondInvertElevation, setPondInvertElevation] = useState(100);
   
+  // Pond mode and stage-storage curve for custom pond modeling
+  const [pondMode, setPondMode] = useState<PondMode>(() => {
+    if (typeof window === 'undefined') return 'generic';
+    const stored = localStorage.getItem('wds_pondMode');
+    return (stored === 'generic' || stored === 'custom') ? stored : 'generic';
+  });
+  
+  const [stageStorageCurve, setStageStorageCurve] = useState<StageStorageCurve | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const stored = localStorage.getItem('wds_stageStorageCurve');
+    if (stored) {
+      try {
+        return JSON.parse(stored) as StageStorageCurve;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+
+  // Persist pond mode and stage-storage curve to localStorage
+  useEffect(() => {
+    localStorage.setItem('wds_pondMode', pondMode);
+  }, [pondMode]);
+
+  useEffect(() => {
+    if (stageStorageCurve) {
+      localStorage.setItem('wds_stageStorageCurve', JSON.stringify(stageStorageCurve));
+    } else {
+      localStorage.removeItem('wds_stageStorageCurve');
+    }
+  }, [stageStorageCurve]);
+  
   const [pondResults, setPondResults] = useState<ModifiedRationalResult[]>([]);
 
   useEffect(() => {
@@ -88,7 +126,7 @@ export default function Home() {
       try {
         const calculatedResults = await Promise.all(
           selectedEvents.map(p => 
-            ModifiedRationalMethod.calculateStorage(preDev, postDev, p, cityId)
+            ModifiedRationalMethod.calculateStorage(preDev, postDev, p, cityId, interpolationMethod)
           )
         );
         setPondResults(calculatedResults);
@@ -99,9 +137,7 @@ export default function Home() {
     }
 
     calculateResults();
-  }, [cityId, selectedEvents, preDev, postDev]);
-
-  const pondAreaSqFt = pondDims.length * pondDims.width;
+  }, [cityId, selectedEvents, preDev, postDev, interpolationMethod]);
 
   const selectedCity = useMemo(() => {
     return Object.values(citiesByState)
@@ -138,6 +174,8 @@ export default function Home() {
               setCityId={setCityId}
               selectedEvents={selectedEvents}
               setSelectedEvents={setSelectedEvents}
+              interpolationMethod={interpolationMethod}
+              setInterpolationMethod={setInterpolationMethod}
             />
           </div>
         )}
@@ -159,6 +197,14 @@ export default function Home() {
                drainageTotals={drainageTotals}
                pondDims={pondDims}
                onPondDimsChange={setPondDims}
+               interpolationMethod={interpolationMethod}
+               setInterpolationMethod={setInterpolationMethod}
+               pondMode={pondMode}
+               onPondModeChange={setPondMode}
+               stageStorageCurve={stageStorageCurve}
+               onStageStorageCurveChange={setStageStorageCurve}
+               pondInvertElevation={pondInvertElevation}
+               onPondInvertElevationChange={setPondInvertElevation}
              />
            </div>
         )}
@@ -168,7 +214,24 @@ export default function Home() {
              results={pondResults} 
              pondDims={pondDims}
              pondInvertElevation={pondInvertElevation}
+             pondMode={pondMode}
+             stageStorageCurve={stageStorageCurve}
            />
+        )}
+
+        {activeTab === 'reports' && (
+          <div className="flex-1 overflow-y-auto">
+            <Reports
+              cityId={cityId}
+              selectedCity={selectedCity}
+              selectedEvents={selectedEvents}
+              interpolationMethod={interpolationMethod}
+              drainageTotals={drainageTotals}
+              pondResults={pondResults}
+              pondDims={pondDims}
+              pondInvertElevation={pondInvertElevation}
+            />
+          </div>
         )}
       </main>
     </div>

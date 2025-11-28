@@ -37,6 +37,7 @@ function initializeDatabase(database: Database.Database) {
       state TEXT NOT NULL,
       latitude REAL,
       longitude REAL,
+      source TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT,
       UNIQUE(name, state)
@@ -46,7 +47,56 @@ function initializeDatabase(database: Database.Database) {
   // Add updated_at column if it doesn't exist (migration for existing databases)
   try {
     database.exec(`ALTER TABLE cities ADD COLUMN updated_at TEXT`);
-  } catch (error) {
+  } catch {
+    // Column already exists, ignore error
+  }
+
+  // Add source column if it doesn't exist (migration for existing databases)
+  try {
+    database.exec(`ALTER TABLE cities ADD COLUMN source TEXT`);
+  } catch {
+    // Column already exists, ignore error
+  }
+
+  // Add source_type column (migration for Atlas 14 support)
+  try {
+    database.exec(`ALTER TABLE cities ADD COLUMN source_type TEXT DEFAULT 'CUSTOM'`);
+  } catch {
+    // Column already exists, ignore error
+  }
+
+  // Add units column (migration for Atlas 14 support)
+  try {
+    database.exec(`ALTER TABLE cities ADD COLUMN units TEXT DEFAULT 'ENGLISH'`);
+  } catch {
+    // Column already exists, ignore error
+  }
+
+  // Add basis column (migration for Atlas 14 support)
+  try {
+    database.exec(`ALTER TABLE cities ADD COLUMN basis TEXT DEFAULT 'INTENSITY'`);
+  } catch {
+    // Column already exists, ignore error
+  }
+
+  // Add series_type column (migration for Atlas 14 support)
+  try {
+    database.exec(`ALTER TABLE cities ADD COLUMN series_type TEXT DEFAULT 'PDS'`);
+  } catch {
+    // Column already exists, ignore error
+  }
+
+  // Add source_metadata column for JSON blob (migration for Atlas 14 support)
+  try {
+    database.exec(`ALTER TABLE cities ADD COLUMN source_metadata TEXT`);
+  } catch {
+    // Column already exists, ignore error
+  }
+
+  // Add notes column for user annotations (migration)
+  try {
+    database.exec(`ALTER TABLE cities ADD COLUMN notes TEXT`);
+  } catch {
     // Column already exists, ignore error
   }
 
@@ -71,13 +121,33 @@ function initializeDatabase(database: Database.Database) {
   `);
 }
 
+export type SourceType = 'CUSTOM' | 'ATLAS14';
+export type DataUnits = 'ENGLISH' | 'METRIC';
+export type DataBasis = 'INTENSITY' | 'DEPTH';
+export type SeriesType = 'PDS' | 'AMS';
+
+export interface CitySourceMetadata {
+  volume?: string;
+  version?: string;
+  location?: string;
+  requestUrl?: string;
+  fetchedAt?: string;
+}
+
 export interface City {
   id: number;
   name: string;
   state: string;
   latitude?: number;
   longitude?: number;
+  source?: string;
+  sourceType?: SourceType;
+  units?: DataUnits;
+  basis?: DataBasis;
+  seriesType?: SeriesType;
+  sourceMetadata?: CitySourceMetadata;
   lastUpdated?: string;
+  notes?: string;
 }
 
 export interface RainfallDataRow {

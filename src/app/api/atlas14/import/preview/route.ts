@@ -7,6 +7,7 @@ interface ParsedRainfallData {
   durationMinutes: number;
   returnPeriod: string;
   intensity: number;
+  source?: string;
 }
 
 // Helper to find the header row index
@@ -35,9 +36,10 @@ function findHeaderRowIndex(lines: string[]): number {
 }
 
 // Helper to extract metadata from preamble
-function extractMetadata(lines: string[]): { city?: string, state?: string } {
+function extractMetadata(lines: string[]): { city?: string, state?: string, source?: string } {
   let city: string | undefined;
   let state: string | undefined;
+  let source: string | undefined;
   
   for (const line of lines) {
     // Look for "Location: City, State" or "Station: Name"
@@ -63,9 +65,22 @@ function extractMetadata(lines: string[]): { city?: string, state?: string } {
         }
       }
     }
+    
+    // Look for source/origin info
+    if (lowerLine.includes('source') || lowerLine.includes('origin') || lowerLine.includes('data from')) {
+      const content = line.split(/[:\-\t]/).slice(1).join(' ').trim();
+      if (content && !source) {
+        source = content;
+      }
+    }
+    
+    // Auto-detect NOAA Atlas 14 from content
+    if (!source && (lowerLine.includes('atlas 14') || lowerLine.includes('noaa'))) {
+      source = 'NOAA Atlas 14';
+    }
   }
   
-  return { city, state };
+  return { city, state, source };
 }
 
 export async function POST(request: Request) {
@@ -107,7 +122,7 @@ export async function POST(request: Request) {
     }
 
     return new Promise<NextResponse>((resolve) => {
-      Papa.parse<any>(csvContent, {
+      Papa.parse<Record<string, string>>(csvContent, {
         header: true,
         skipEmptyLines: true,
         // Transform header: trim, lower case, remove non-word chars (except digits)
@@ -140,10 +155,7 @@ export async function POST(request: Request) {
           }
 
           const sampleRows = results.data.slice(0, 3);
-          const validReturnPeriods = ['1yr', '2yr', '5yr', '10yr', '25yr', '50yr', '100yr', '200yr', '500yr', '1000yr'];
-          // Note: We support 1yr, 200yr etc as they appear in the file, but the Type definition might need update if used elsewhere.
-          // For this specific app context, we map to standard ones if possible or keep them if flexible.
-          // The standard app types usually support 2, 5, 10, 25, 50, 100.
+          // Standard return periods supported by this app
           const supportedReturnPeriods = ['2yr', '5yr', '10yr', '25yr', '50yr', '100yr'];
 
           const parsedData: ParsedRainfallData[] = [];
@@ -163,10 +175,12 @@ export async function POST(request: Request) {
           // 3. Other metadata columns
           const cityKeys = allKeys.filter(k => /city|location|name|place|station|site/i.test(k));
           const stateKeys = allKeys.filter(k => /state|province|region|code/i.test(k) && k.length <= 15);
+          const sourceKeys = allKeys.filter(k => /source|origin|provider|agency/i.test(k));
 
           const columnMappings = {
             city: cityKeys[0] || (fileMetadata.city ? fileMetadata.city : 'not found'),
             state: stateKeys[0] || (fileMetadata.state ? fileMetadata.state : 'not found'),
+            source: sourceKeys[0] || (fileMetadata.source ? fileMetadata.source : 'not specified'),
             duration: durationKeys[0] || 'not found',
             returnPeriod: isMatrixFormat ? `Matrix Columns (${matrixKeys.join(', ')})` : 'List Format',
             intensity: isMatrixFormat ? 'Matrix Values' : 'List Format',
@@ -176,15 +190,19 @@ export async function POST(request: Request) {
           for (let rowIndex = 0; rowIndex < results.data.length; rowIndex++) {
             const row = results.data[rowIndex];
             
-            // A. City/State Resolution
+            // A. City/State/Source Resolution
             let cityField = '';
             let stateField = '';
+            let sourceField = '';
             
             for (const key of cityKeys) if (row[key]) cityField = row[key];
             if (!cityField && fileMetadata.city) cityField = fileMetadata.city;
             
             for (const key of stateKeys) if (row[key]) stateField = row[key];
             if (!stateField && fileMetadata.state) stateField = fileMetadata.state;
+            
+            for (const key of sourceKeys) if (row[key]) sourceField = row[key];
+            if (!sourceField && fileMetadata.source) sourceField = fileMetadata.source;
             
             if (!cityField) cityField = "Unknown City";
             if (!stateField) stateField = "Unknown State";
@@ -244,7 +262,8 @@ export async function POST(request: Request) {
                                    state: String(stateField).trim().toUpperCase(),
                                    durationMinutes,
                                    returnPeriod: rp,
-                                   intensity
+                                   intensity,
+                                   source: sourceField || undefined
                                });
                            }
                        }
@@ -264,9 +283,10 @@ export async function POST(request: Request) {
             citiesMap.get(key)!.push(data);
           }
 
-          const citiesArray = Array.from(citiesMap.entries()).map(([key, data]) => ({
+          const citiesArray = Array.from(citiesMap.entries()).map(([, data]) => ({
             city: data[0].city,
             state: data[0].state,
+            source: data[0].source,
             recordCount: data.length
           }));
 

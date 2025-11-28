@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Upload, AlertCircle, FileText, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Upload, AlertCircle, FileText, ChevronDown, ChevronRight } from 'lucide-react';
 import Atlas14ImportPreview from './Atlas14ImportPreview';
-import { clearAtlas14Cache } from '@/utils/atlas14';
+
 
 interface ParsedData {
   city: string;
@@ -25,41 +25,12 @@ export default function Atlas14Import() {
     parsedRows: number;
     detectedHeaders?: string[];
     columnMappings?: Record<string, string>;
-    sampleRows?: Array<{ rowNumber: number; data: any; keys: string[] }>;
-    debugInfo?: any;
+    sampleRows?: Array<{ rowNumber: number; data: Record<string, unknown>; keys: string[] }>;
+    debugInfo?: Record<string, unknown>;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [clearing, setClearing] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
-  const [lastDebugInfo, setLastDebugInfo] = useState<any>(null);
-
-  const handleClearData = async () => {
-    if (!confirm('Are you sure you want to clear ALL rainfall data from the database? This cannot be undone.')) {
-      return;
-    }
-
-    setClearing(true);
-
-    try {
-      const response = await fetch('/api/atlas14/clear', {
-        method: 'POST',
-      });
-
-      const result = await response.json();
-
-      if (response.ok) {
-        clearAtlas14Cache();
-        alert('All rainfall data has been cleared. Cities remain in the database.');
-      } else {
-        alert('Failed to clear data: ' + (result.error || 'Unknown error'));
-      }
-    } catch (error) {
-      alert('Failed to clear data');
-    } finally {
-      setClearing(false);
-    }
-  };
-
+  const [lastDebugInfo, setLastDebugInfo] = useState<Record<string, unknown> | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -135,7 +106,7 @@ export default function Atlas14Import() {
           });
         }
       }
-    } catch (error) {
+    } catch {
       setError('Failed to parse CSV file');
     } finally {
       setParsing(false);
@@ -180,11 +151,11 @@ export default function Atlas14Import() {
         <div className="p-2 bg-primary/10 rounded-full text-primary">
           <Upload className="w-6 h-6" />
         </div>
-        <h2 className="text-xl font-semibold">Import Atlas 14 Data</h2>
+        <h2 className="text-xl font-semibold">Import Rainfall Data</h2>
       </div>
 
       <p className="text-sm text-gray-400 mb-4">
-        Upload a CSV file exported from Atlas 14. The system will automatically detect and parse the data format.
+        Upload a CSV file with rainfall intensity data. Supports NOAA Atlas 14, municipal sources, or custom data.
       </p>
 
       <div className="space-y-4">
@@ -261,7 +232,7 @@ export default function Atlas14Import() {
                 {showDebug && (
                   <div className="mt-2 space-y-2 font-mono overflow-x-auto max-w-full text-gray-300">
                     <div>
-                      <span className="text-gray-500">Detected Header Row Index:</span> {lastDebugInfo.headerRowIndex}
+                      <span className="text-gray-500">Detected Header Row Index:</span> {String(lastDebugInfo.headerRowIndex)}
                     </div>
 
                     <div>
@@ -290,29 +261,6 @@ export default function Atlas14Import() {
         )}
       </div>
 
-      <div className="flex gap-3">
-        <button
-          onClick={handleClearData}
-          disabled={clearing}
-          className="flex-1 bg-red-500/20 text-red-400 border border-red-500/50 px-4 py-3 rounded-lg font-medium
-            hover:bg-red-500/30 transition-colors
-            disabled:opacity-50 disabled:cursor-not-allowed
-            flex items-center justify-center gap-2"
-        >
-          {clearing ? (
-            <>
-              <div className="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
-              Clearing...
-            </>
-          ) : (
-            <>
-              <Trash2 className="w-4 h-4" />
-              Clear All Rainfall Data
-            </>
-          )}
-        </button>
-      </div>
-
       <div className="mt-4 p-3 bg-background rounded border border-border/50">
         <div className="flex items-start gap-2">
           <AlertCircle className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
@@ -320,11 +268,11 @@ export default function Atlas14Import() {
             <p className="font-medium mb-1">Supported CSV Formats:</p>
 
             <ul className="list-disc list-inside space-y-1 ml-2">
-              <li>Atlas 14 standard export format (Point or Area)</li>
-              <li>Files with metadata headers (Location, Station) before the table</li>
+              <li>NOAA Atlas 14 standard export format (Point or Area)</li>
+              <li>Municipal or custom rainfall data with city/state columns</li>
+              <li>Optional &quot;source&quot; column to identify data origin</li>
               <li>Matrix format (Duration vs Return Periods)</li>
               <li>List format (Duration, Return Period, Intensity columns)</li>
-              <li>Flexible column name matching</li>
             </ul>
           </div>
         </div>

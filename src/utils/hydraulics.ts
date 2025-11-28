@@ -939,8 +939,8 @@ export function solveWeirSize(
     let maxDiameter = 20; // Maximum reasonable diameter (ft)
     
     // Check if solution is possible at max diameter
-    let testRadius = maxDiameter / 2;
-    let testWettedWidth = calculateCircularWettedWidth(testRadius, headAboveInvertFt);
+    const testRadius = maxDiameter / 2;
+    const testWettedWidth = calculateCircularWettedWidth(testRadius, headAboveInvertFt);
     if (testWettedWidth < requiredLength) {
       return { success: false, error: 'Solution cannot be found with current layout: requires diameter larger than 20 ft' };
     }

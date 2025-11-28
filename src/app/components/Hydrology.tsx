@@ -1,25 +1,156 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { ReturnPeriod, getRainfallData, getCitiesByState, City } from '@/utils/atlas14';
-import { MapPin, CloudRain, ChevronDown } from 'lucide-react';
-import Atlas14Import from './Atlas14Import';
+import React, { useState, useEffect, useMemo } from 'react';
+import { ReturnPeriod, getRainfallData, getCitiesByState, clearAtlas14Cache, City, InterpolationMethod } from '@/utils/atlas14';
+import { MapPin, CloudRain, Settings, Globe, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import RainfallDataImport from './Atlas14Import';
+import IdfCurveChart from './charts/IdfCurveChart';
+import SearchableComboBox, { ComboBoxOption } from './SearchableComboBox';
 
 interface HydrologyProps {
   cityId: number;
   setCityId: (cityId: number) => void;
   selectedEvents: ReturnPeriod[];
   setSelectedEvents: (events: ReturnPeriod[]) => void;
+  interpolationMethod: InterpolationMethod;
+  setInterpolationMethod: (method: InterpolationMethod) => void;
 }
 
 const AVAILABLE_EVENTS: ReturnPeriod[] = ['2yr', '5yr', '10yr', '25yr', '50yr', '100yr'];
 
-export default function Hydrology({ cityId, setCityId, selectedEvents, setSelectedEvents }: HydrologyProps) {
+export default function Hydrology({ cityId, setCityId, selectedEvents, setSelectedEvents, interpolationMethod, setInterpolationMethod }: HydrologyProps) {
   const [citiesByState, setCitiesByState] = useState<Record<string, City[]>>({});
   const [rainfallData, setRainfallData] = useState<Array<{ durationMinutes: number; intensities: Record<ReturnPeriod, number> }>>([]);
   const [loading, setLoading] = useState(true);
   const [showImport, setShowImport] = useState(false);
-  const [dropdownOpen, setDropdownOpen] = useState(false);
+  
+  // NOAA Atlas 14 fetch states
+  const [showNoaaFetch, setShowNoaaFetch] = useState(false);
+  const [fetchLat, setFetchLat] = useState('');
+  const [fetchLon, setFetchLon] = useState('');
+  const [fetchName, setFetchName] = useState('');
+  const [fetchState, setFetchState] = useState('');
+  const [fetchUnits, setFetchUnits] = useState<'ENGLISH' | 'METRIC'>('ENGLISH');
+  const [fetchSeriesType, setFetchSeriesType] = useState<'PDS' | 'AMS'>('PDS');
+  const [fetchLoading, setFetchLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [fetchSuccess, setFetchSuccess] = useState<string | null>(null);
+  
+  // Refresh state
+  const [refreshingCityId, setRefreshingCityId] = useState<number | null>(null);
+
+  // Function to reload cities and data
+  const reloadCities = async () => {
+    clearAtlas14Cache();
+    const cities = await getCitiesByState();
+    setCitiesByState(cities);
+    return cities;
+  };
+
+  // Function to handle NOAA fetch
+  const handleNoaaFetch = async () => {
+    setFetchError(null);
+    setFetchSuccess(null);
+    
+    const lat = parseFloat(fetchLat);
+    const lon = parseFloat(fetchLon);
+    
+    if (isNaN(lat) || isNaN(lon)) {
+      setFetchError('Please enter valid latitude and longitude values');
+      return;
+    }
+    
+    if (!fetchName.trim()) {
+      setFetchError('Please enter a location name');
+      return;
+    }
+    
+    if (!fetchState.trim() || fetchState.trim().length !== 2) {
+      setFetchError('Please enter a valid 2-letter state abbreviation');
+      return;
+    }
+    
+    setFetchLoading(true);
+    
+    try {
+      const response = await fetch('/api/atlas14/fetch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lat,
+          lon,
+          name: fetchName.trim(),
+          state: fetchState.trim().toUpperCase(),
+          units: fetchUnits,
+          basis: 'INTENSITY',
+          seriesType: fetchSeriesType,
+        }),
+      });
+      
+      const result = await response.json();
+      
+      if (!result.success) {
+        setFetchError(result.message || 'Failed to fetch data from NOAA');
+        return;
+      }
+      
+      setFetchSuccess(`Successfully imported ${result.dataCount} data points for ${result.city.name}, ${result.city.state}`);
+      
+      // Reload cities and select the new one
+      await reloadCities();
+      if (result.city?.id) {
+        setCityId(result.city.id);
+        // Load the rainfall data for the new city
+        const data = await getRainfallData(result.city.id);
+        setRainfallData(data);
+      }
+      
+      // Clear form
+      setFetchLat('');
+      setFetchLon('');
+      setFetchName('');
+      setFetchState('');
+      
+    } catch (error) {
+      setFetchError(error instanceof Error ? error.message : 'An error occurred');
+    } finally {
+      setFetchLoading(false);
+    }
+  };
+
+  // Function to refresh an Atlas 14 city
+  const handleRefreshCity = async (city: City) => {
+    if (city.sourceType !== 'ATLAS14') return;
+    
+    setRefreshingCityId(city.id);
+    
+    try {
+      const response = await fetch(`/api/atlas14/cities/${city.id}/refresh`, {
+        method: 'POST',
+      });
+      
+      const result = await response.json();
+      
+      if (!result.success) {
+        alert(`Failed to refresh: ${result.message}`);
+        return;
+      }
+      
+      // Reload cities
+      await reloadCities();
+      
+      // Reload rainfall data if this is the selected city
+      if (city.id === cityId) {
+        const data = await getRainfallData(city.id);
+        setRainfallData(data);
+      }
+      
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'An error occurred');
+    } finally {
+      setRefreshingCityId(null);
+    }
+  };
 
   // Fetch cities on mount
   useEffect(() => {
@@ -51,20 +182,31 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
     }
   }, [cityId]);
 
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    if (!dropdownOpen) return;
-    
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-      if (!target.closest('.city-dropdown')) {
-        setDropdownOpen(false);
-      }
-    };
+  // Convert cities to ComboBoxOption format
+  const cityOptions: ComboBoxOption[] = useMemo(() => {
+    return Object.entries(citiesByState).flatMap(([state, cities]) =>
+      cities.map(city => ({
+        id: city.id,
+        label: city.name,
+        group: state,
+        source: city.source,
+        sourceType: city.sourceType,
+        latitude: city.latitude,
+        longitude: city.longitude,
+        lastUpdated: city.lastUpdated,
+      }))
+    );
+  }, [citiesByState]);
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [dropdownOpen]);
+  // Handle refresh from combobox
+  const handleRefreshFromComboBox = (option: ComboBoxOption) => {
+    const city = Object.values(citiesByState)
+      .flat()
+      .find(c => c.id === option.id);
+    if (city) {
+      handleRefreshCity(city);
+    }
+  };
 
   const toggleEvent = (event: ReturnPeriod) => {
     if (selectedEvents.includes(event)) {
@@ -103,66 +245,36 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
               Loading cities...
             </div>
           ) : (
-            <div className="relative city-dropdown">
-              <button
-                type="button"
-                onClick={() => setDropdownOpen(!dropdownOpen)}
-                className="w-full bg-background border border-border rounded px-4 py-3 text-base focus:ring-2 focus:ring-primary outline-none transition-all cursor-pointer hover:border-primary/50 text-left flex items-center justify-between"
-              >
-                <span>
-                  {selectedCity 
-                    ? `${selectedCity.name}, ${selectedCity.state}`
-                    : 'Select a city...'}
-                </span>
-                <ChevronDown className={`w-5 h-5 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
-              </button>
-              
-              {dropdownOpen && (
-                <div className="absolute z-50 w-full mt-1 bg-background border border-border rounded shadow-lg max-h-96 overflow-y-auto">
-                  {Object.entries(citiesByState).map(([state, cities]) => (
-                    <div key={state}>
-                      <div className="px-4 py-2 text-xs font-semibold text-gray-500 bg-slate-900/50 sticky top-0">
-                        {state}
-                      </div>
-                      {cities.map(c => (
-                        <button
-                          key={c.id}
-                          type="button"
-                          onClick={() => {
-                            setCityId(c.id);
-                            setDropdownOpen(false);
-                          }}
-                          className={`w-full px-4 py-3 text-left hover:bg-primary/10 transition-colors ${
-                            cityId === c.id ? 'bg-primary/5' : ''
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-4">
-                            <span className="text-base">{c.name}, {c.state}</span>
-                            {c.lastUpdated && (
-                              <span className="text-[11px] text-gray-500 whitespace-nowrap ml-3 opacity-75">
-                                Updated: {new Date(c.lastUpdated).toLocaleDateString()}
-                              </span>
-                            )}
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <SearchableComboBox
+              options={cityOptions}
+              value={cityId}
+              onChange={setCityId}
+              placeholder="Select a city..."
+              groupBy={true}
+              onRefresh={handleRefreshFromComboBox}
+              refreshingId={refreshingCityId}
+            />
           )}
           <p className="text-xs text-gray-500 mt-3">
             {selectedCity 
-              ? `Pulling latest Atlas 14 Point Precipitation Frequency Estimates for ${selectedCity.name}, ${selectedCity.state}.`
+              ? `Loading rainfall data for ${selectedCity.name}, ${selectedCity.state}${selectedCity.source ? ` (${selectedCity.source})` : ''}.`
               : 'Select a city to view rainfall data.'}
           </p>
-          <button
-            onClick={() => setShowImport(!showImport)}
-            className="mt-3 text-xs text-primary hover:underline"
-          >
-            {showImport ? 'Hide' : 'Show'} CSV Import
-          </button>
+          <div className="flex gap-3 mt-3">
+            <button
+              onClick={() => setShowImport(!showImport)}
+              className="text-xs text-primary hover:underline"
+            >
+              {showImport ? 'Hide' : 'Show'} CSV Import
+            </button>
+            <button
+              onClick={() => setShowNoaaFetch(!showNoaaFetch)}
+              className="text-xs text-emerald-400 hover:underline flex items-center gap-1"
+            >
+              <Globe className="w-3 h-3" />
+              {showNoaaFetch ? 'Hide' : 'Fetch from'} NOAA Atlas 14
+            </button>
+          </div>
         </div>
 
         {/* Storm Event Selection */}
@@ -195,17 +307,154 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
       {/* CSV Import Section */}
       {showImport && (
         <div className="mb-8">
-          <Atlas14Import />
+          <RainfallDataImport />
+        </div>
+      )}
+
+      {/* NOAA Atlas 14 Fetch Section */}
+      {showNoaaFetch && (
+        <div className="mb-8 bg-card p-6 rounded-lg border border-border shadow-lg">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 bg-emerald-500/10 rounded-full text-emerald-400">
+              <Globe className="w-5 h-5" />
+            </div>
+            <h2 className="text-lg font-semibold">Fetch from NOAA Atlas 14</h2>
+          </div>
+          <p className="text-sm text-gray-400 mb-4">
+            Enter coordinates to fetch rainfall intensity data directly from NOAA&apos;s Precipitation Frequency Data Server.
+            This works for locations within the United States covered by Atlas 14.
+          </p>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Latitude</label>
+              <input
+                type="number"
+                step="0.0001"
+                placeholder="e.g., 33.0198"
+                value={fetchLat}
+                onChange={(e) => setFetchLat(e.target.value)}
+                className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Longitude</label>
+              <input
+                type="number"
+                step="0.0001"
+                placeholder="e.g., -96.6989"
+                value={fetchLon}
+                onChange={(e) => setFetchLon(e.target.value)}
+                className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Location Name</label>
+              <input
+                type="text"
+                placeholder="e.g., Plano"
+                value={fetchName}
+                onChange={(e) => setFetchName(e.target.value)}
+                className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">State (2-letter)</label>
+              <input
+                type="text"
+                placeholder="e.g., TX"
+                maxLength={2}
+                value={fetchState}
+                onChange={(e) => setFetchState(e.target.value.toUpperCase())}
+                className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none uppercase"
+              />
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Units</label>
+              <select
+                value={fetchUnits}
+                onChange={(e) => setFetchUnits(e.target.value as 'ENGLISH' | 'METRIC')}
+                title="Select measurement units"
+                className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              >
+                <option value="ENGLISH">English (in/hr)</option>
+                <option value="METRIC">Metric (mm/hr)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Series Type</label>
+              <select
+                value={fetchSeriesType}
+                onChange={(e) => setFetchSeriesType(e.target.value as 'PDS' | 'AMS')}
+                title="Select precipitation series type"
+                className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              >
+                <option value="PDS">Partial Duration Series (PDS)</option>
+                <option value="AMS">Annual Maximum Series (AMS)</option>
+              </select>
+            </div>
+            <div className="flex items-end">
+              <button
+                onClick={handleNoaaFetch}
+                disabled={fetchLoading}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-800 disabled:cursor-not-allowed text-white font-medium px-4 py-2 rounded transition-colors flex items-center justify-center gap-2"
+              >
+                {fetchLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Fetching...
+                  </>
+                ) : (
+                  <>
+                    <Globe className="w-4 h-4" />
+                    Fetch Data
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+          
+          {/* Error message */}
+          {fetchError && (
+            <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/30 rounded text-red-400 text-sm">
+              <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <span>{fetchError}</span>
+            </div>
+          )}
+          
+          {/* Success message */}
+          {fetchSuccess && (
+            <div className="flex items-start gap-2 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded text-emerald-400 text-sm">
+              <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <span>{fetchSuccess}</span>
+            </div>
+          )}
+          
+          <div className="mt-4 p-3 bg-slate-900/50 rounded-lg text-xs text-gray-400">
+            <strong className="text-gray-300">Test Coordinates:</strong>
+            <ul className="mt-1 space-y-0.5 ml-4 list-disc">
+              <li>Plano, TX: 33.0198, -96.6989</li>
+              <li>Dallas, TX: 32.7767, -96.7970</li>
+              <li>Houston, TX: 29.7604, -95.3698</li>
+            </ul>
+          </div>
         </div>
       )}
 
       {/* Data Table */}
       {rainfallData.length > 0 && (
-        <div className="bg-card border border-border rounded-lg overflow-hidden shadow-xl">
+        <div className="bg-card border border-border rounded-lg overflow-hidden shadow-xl mb-8">
           <div className="px-6 py-4 border-b border-border bg-slate-900/50">
             <h3 className="font-semibold text-lg flex items-center gap-2">
-               Atlas 14 Rainfall Intensity Data (in/hr) 
-               <span className="text-xs font-normal text-gray-400 ml-2 py-0.5 px-2 bg-slate-800 rounded-full">Source: NOAA</span>
+               Rainfall Intensity Data (in/hr)
+               {selectedCity?.source && (
+                 <span className="text-xs font-normal text-gray-400 ml-2 py-0.5 px-2 bg-slate-800 rounded-full">
+                   Source: {selectedCity.source}
+                 </span>
+               )}
             </h3>
           </div>
           <div className="overflow-x-auto">
@@ -238,6 +487,61 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
           </div>
         </div>
       )}
+
+      {/* IDF Curve Visualization */}
+      {rainfallData.length > 0 && selectedEvents.length > 0 && (
+        <IdfCurveChart 
+          rainfallData={rainfallData}
+          selectedEvents={selectedEvents}
+          interpolationMethod={interpolationMethod}
+        />
+      )}
+
+      {/* Interpolation Method Selection - Moved to Bottom */}
+      <div className="mb-8 bg-card p-6 rounded-lg border border-border shadow-lg">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="p-2 bg-primary/10 rounded-full text-primary">
+            <Settings className="w-5 h-5" />
+          </div>
+          <h2 className="text-lg font-semibold">Interpolation Method</h2>
+        </div>
+        <p className="text-sm text-gray-400 mb-4">
+          Select how rainfall data is interpolated between duration points. The IDF curve above updates to reflect the selected method.
+        </p>
+        <div className="flex flex-col sm:flex-row gap-3">
+          <button
+            onClick={() => setInterpolationMethod('log-log')}
+            className={`px-4 py-3 rounded-lg border text-sm font-medium transition-all text-left flex-1 ${
+              interpolationMethod === 'log-log'
+                ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400'
+                : 'bg-background border-border text-gray-400 hover:border-gray-500'
+            }`}
+          >
+            <div className="font-semibold mb-1">Log-Log Interpolation</div>
+            <div className="text-xs opacity-75">
+              Standard method for IDF curves. Interpolates linearly in log-log space, producing power-law relationships between data points. Curves appear as straight lines on the log-log graph.
+            </div>
+          </button>
+          <button
+            onClick={() => setInterpolationMethod('linear')}
+            className={`px-4 py-3 rounded-lg border text-sm font-medium transition-all text-left flex-1 ${
+              interpolationMethod === 'linear'
+                ? 'bg-amber-500/20 border-amber-500 text-amber-400'
+                : 'bg-background border-border text-gray-400 hover:border-gray-500'
+            }`}
+          >
+            <div className="font-semibold mb-1">Linear Interpolation</div>
+            <div className="text-xs opacity-75">
+              Simple linear interpolation in arithmetic space. Less accurate for IDF relationships. Curves appear curved on the log-log graph because linear segments in arithmetic space are not linear in log-log space.
+            </div>
+          </button>
+        </div>
+        <div className="mt-4 p-3 bg-slate-900/50 rounded-lg text-xs text-gray-400">
+          <strong className="text-gray-300">Note:</strong> The graph always uses log-log axes (standard in hydrology). 
+          The interpolation method affects how values are calculated between source data points. 
+          Log-log interpolation is generally preferred because IDF relationships follow power laws.
+        </div>
+      </div>
 
     </div>
   );

@@ -2,7 +2,7 @@
 
 
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 
 import { Plus, Trash2, Calculator, Table as TableIcon, ArrowRight, Waves } from 'lucide-react';
 
@@ -50,7 +50,7 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
       return DEFAULT_AREAS;
     }
     try {
-      const raw = window.localStorage.getItem('waldo-drainage-areas');
+      const raw = window.localStorage.getItem('wds-stormforge-drainage-areas');
       if (!raw) return DEFAULT_AREAS;
       const parsed = JSON.parse(raw) as DrainageArea[];
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -73,7 +73,7 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
 
     try {
 
-      window.localStorage.setItem('waldo-drainage-areas', JSON.stringify(areas));
+      window.localStorage.setItem('wds-stormforge-drainage-areas', JSON.stringify(areas));
 
     } catch (error) {
 
@@ -111,7 +111,7 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
 
         areas.map(async area => {
 
-          const areaResults: Record<ReturnPeriod, { intensity: number, peakFlowCfs: number }> = {} as any;
+          const areaResults: Record<ReturnPeriod, { intensity: number, peakFlowCfs: number }> = {} as Record<ReturnPeriod, { intensity: number, peakFlowCfs: number }>;
 
           for (const event of selectedEvents) {
 
@@ -211,7 +211,7 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
 
   // Calculate Totals for a specific type
 
-  const calculateTotals = (type: 'existing' | 'proposed'): DrainageTotals => {
+  const calculateTotals = useCallback((type: 'existing' | 'proposed'): DrainageTotals => {
 
       const typeAreas = areas.filter(a => a.type === type && a.isIncluded); // Only sum included areas
 
@@ -239,13 +239,13 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
 
       return { totalArea, weightedC, tcMinutes, flowTotals };
 
-  };
+  }, [areas, results, selectedEvents]);
 
 
 
-  const existingTotals = useMemo(() => calculateTotals('existing'), [areas, results, selectedEvents]);
+  const existingTotals = useMemo(() => calculateTotals('existing'), [calculateTotals]);
 
-  const proposedTotals = useMemo(() => calculateTotals('proposed'), [areas, results, selectedEvents]);
+  const proposedTotals = useMemo(() => calculateTotals('proposed'), [calculateTotals]);
 
 
 
@@ -343,7 +343,7 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
 
             <tbody className="divide-y divide-border">
 
-              {results.filter(r => r.type === type).map((row, idx) => (
+              {results.filter(r => r.type === type).map((row) => (
 
                 <tr key={row.id} className={`hover:bg-white/5 transition-colors group ${!row.isIncluded ? 'opacity-50 bg-slate-900/20' : ''}`}>
 
@@ -377,6 +377,10 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
 
                       className="w-full bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-2 py-1 outline-none transition-all"
 
+                      title="Drainage area name"
+
+                      aria-label="Drainage area name"
+
                     />
 
                   </td>
@@ -392,6 +396,10 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
                       onChange={(e) => updateArea(row.id, 'areaAcres', parseFloat(e.target.value) || 0)}
 
                       className="w-full text-right bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-2 py-1 outline-none transition-all font-mono"
+
+                      title="Area in acres"
+
+                      aria-label="Area in acres"
 
                     />
 
@@ -409,6 +417,10 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
 
                       className="w-full text-right bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-2 py-1 outline-none transition-all font-mono"
 
+                      title="Runoff coefficient (C-factor)"
+
+                      aria-label="Runoff coefficient (C-factor)"
+
                     />
 
                   </td>
@@ -424,6 +436,10 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
                       onChange={(e) => updateArea(row.id, 'tcMinutes', parseFloat(e.target.value) || 0)}
 
                       className="w-full text-right bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-2 py-1 outline-none transition-all font-mono"
+
+                      title="Time of concentration in minutes"
+
+                      aria-label="Time of concentration in minutes"
 
                     />
 
@@ -460,6 +476,10 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
                       onClick={() => removeArea(row.id)}
 
                       className="text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+
+                      title="Remove drainage area"
+
+                      aria-label="Remove drainage area"
 
                     >
 

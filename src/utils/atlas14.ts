@@ -1,7 +1,14 @@
-// Atlas 14 Rainfall Data (Intensity in inches/hour)
-// Source: NOAA Atlas 14 Point Precipitation Frequency Estimates
+// Rainfall Data Utilities (Intensity in inches/hour)
+// Supports various sources: NOAA Atlas 14, municipal data, custom imports
+
+import { InterpolationMethod, getIntensityInPerHr as getIdfIntensity } from './idf';
 
 export type ReturnPeriod = '2yr' | '5yr' | '10yr' | '25yr' | '50yr' | '100yr';
+export type { InterpolationMethod } from './idf';
+export type SourceType = 'CUSTOM' | 'ATLAS14';
+export type DataUnits = 'ENGLISH' | 'METRIC';
+export type DataBasis = 'INTENSITY' | 'DEPTH';
+export type SeriesType = 'PDS' | 'AMS';
 
 export interface RainfallData {
   durationMinutes: number;
@@ -12,12 +19,20 @@ export interface City {
   id: number;
   name: string;
   state: string;
+  latitude?: number;
+  longitude?: number;
+  source?: string;
+  sourceType?: SourceType;
+  units?: DataUnits;
+  basis?: DataBasis;
+  seriesType?: SeriesType;
   lastUpdated?: string;
+  dataCount?: number;
 }
 
 // Cache for API responses
 let citiesCache: Record<string, City[]> | null = null;
-let rainfallDataCache: Map<number, RainfallData[]> = new Map();
+const rainfallDataCache: Map<number, RainfallData[]> = new Map();
 
 /**
  * Fetches all cities grouped by state from the API
@@ -64,13 +79,20 @@ export async function getRainfallDataByCityId(cityId: number): Promise<RainfallD
 }
 
 /**
- * Gets the intensity for a specific duration and return period using linear interpolation.
+ * Gets the intensity for a specific duration and return period.
+ * Uses the specified interpolation method (default: 'log-log' for better accuracy).
  * Requires cityId instead of city name.
+ * 
+ * @param durationMinutes - Duration in minutes
+ * @param returnPeriod - Storm frequency
+ * @param cityId - City ID
+ * @param method - Interpolation method ('linear' or 'log-log'), defaults to 'log-log'
  */
 export async function getIntensity(
   durationMinutes: number, 
   returnPeriod: ReturnPeriod, 
-  cityId: number
+  cityId: number,
+  method: InterpolationMethod = 'log-log'
 ): Promise<number> {
   const data = await getRainfallDataByCityId(cityId);
   
@@ -78,18 +100,8 @@ export async function getIntensity(
     return 0;
   }
   
-  // Find the two data points surrounding the requested duration
-  const lower = data.slice().reverse().find(d => d.durationMinutes <= durationMinutes);
-  const upper = data.find(d => d.durationMinutes >= durationMinutes);
-
-  if (!lower && !upper) return 0;
-  if (!lower) return upper!.intensities[returnPeriod];
-  if (!upper) return lower!.intensities[returnPeriod];
-  if (lower.durationMinutes === upper.durationMinutes) return lower.intensities[returnPeriod];
-
-  // Linear Interpolation
-  const t = (durationMinutes - lower.durationMinutes) / (upper.durationMinutes - lower.durationMinutes);
-  return lower.intensities[returnPeriod] + t * (upper.intensities[returnPeriod] - lower.intensities[returnPeriod]);
+  // Use the IDF interpolation module
+  return getIdfIntensity(data, returnPeriod, durationMinutes, method);
 }
 
 /**

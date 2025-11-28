@@ -2,463 +2,12 @@
 
 import React, { useState, useMemo, useRef, useCallback } from 'react';
 import { Trash2, Plus, CheckCircle, XCircle, AlertTriangle, ChevronDown, ChevronUp, Droplets, Waves, ArrowDownToLine, GripVertical, Sparkles, Loader2, X, ChevronUp as ChevronUpIcon, ChevronDown as ChevronDownIcon, Layers } from 'lucide-react';
-import { OutfallStructure, OutfallStructureType, calculateTotalDischarge, detectOverlaps, OverlapRegion, solveStructureSize, roundToPrecision, getStructureDischarge } from '@/utils/hydraulics';
+import { OutfallStructure, OutfallStructureType, calculateTotalDischarge, detectOverlaps, solveStructureSize, roundToPrecision, getStructureDischarge } from '@/utils/hydraulics';
 import { getOrificeStackingOffset } from '@/utils/hydraulicsConfig';
 import { ModifiedRationalResult } from '@/utils/rationalMethod';
-
-// --- Outfall Type ---
-type OutfallStyle = 'orifice_plate';
-
-// --- Outfall Profile Visualization Component ---
-function OutfallProfile({ 
-  structures, 
-  pondInvert, 
-  wseList,
-  overlaps,
-  outfallStyle,
-  plateSize,
-  onStyleChange,
-  onPlateSizeChange
-}: { 
-  structures: OutfallStructure[], 
-  pondInvert: number, 
-  wseList: { label: string; elevation: number; color: string; isPassing: boolean; isTopLine?: boolean }[],
-  overlaps: OverlapRegion[],
-  outfallStyle: OutfallStyle,
-  plateSize: { width: number; height: number },
-  onStyleChange: (style: OutfallStyle) => void,
-  onPlateSizeChange: (size: { width: number; height: number }) => void
-}) {
-  // SVG Dimensions - use viewBox for scaling
-  const svgWidth = 280;
-  const svgHeight = 500;
-  // Increased left padding to ensure tick labels don't overlap with plate
-  const padding = { top: 30, bottom: 30, left: 55, right: 30 };
-  
-  // Graph area dimensions
-  const graphWidth = svgWidth - padding.left - padding.right;
-  const graphHeight = svgHeight - padding.top - padding.bottom;
-
-  // Calculate Elevation Range
-  // Include plate height in range calculation
-  const maxWSE = Math.max(...wseList.map(w => w.elevation), pondInvert + 5);
-  const maxStructEl = Math.max(...structures.map(s => s.invertElevation + (s.type === 'circular' ? (s.diameterFt || 0) : (s.heightFt || 0))), pondInvert);
-  const plateTopEl = pondInvert + plateSize.height;
-  
-  const minEl = pondInvert;
-  const maxEl = Math.max(maxWSE, maxStructEl, plateTopEl) + 1;
-  const elRange = maxEl - minEl || 10; // Prevent div by zero
-
-  // Scale Helper - Y position from elevation
-  const getY = (el: number) => {
-    const relativeY = (el - minEl) / elRange;
-    return svgHeight - padding.bottom - (relativeY * graphHeight);
-  };
-
-  // Ticks - fewer ticks for cleaner display
-  const tickCount = 8;
-  const ticks = Array.from({ length: tickCount + 1 }, (_, i) => minEl + (elRange * i / tickCount));
-
-  // Calculate horizontal extent needed for structures
-  let minX = 0;
-  let maxX = 0;
-  
-  structures.forEach(s => {
-    const offset = s.horizontalOffsetFt || 0;
-    let leftEdge: number;
-    let rightEdge: number;
-    
-    if (s.type === 'circular') {
-      const dia = s.diameterFt || 0;
-      leftEdge = offset - dia/2;
-      rightEdge = offset + dia/2;
-    } else {
-      const w = s.widthFt || 0;
-      leftEdge = offset - w/2;
-      rightEdge = offset + w/2;
-    }
-    
-    minX = Math.min(minX, leftEdge);
-    maxX = Math.max(maxX, rightEdge);
-  });
-  
-  // Calculate scale to fit plate within graph area
-  // The plate should be centered and fit within the graph area with margins
-  const plateMargin = 10; // pixels margin on each side
-  const availableWidth = graphWidth - (plateMargin * 2);
-  
-  // Scale based on plate width - plate should fit nicely in available space
-  const xScaleFtPerPixel = Math.max(plateSize.width, 4) / availableWidth;
-  const yScaleFtPerPixel = elRange / graphHeight;
-  
-  // Center of the graph area
-  const graphCenterX = padding.left + graphWidth / 2;
-  
-  // Scale helper for X-axis (feet to pixels) - 0 is at center
-  const getX = (xFt: number) => {
-    return graphCenterX + (xFt / xScaleFtPerPixel);
-  };
-  
-  // Helper to get width in pixels for a given width in feet
-  const getWidthPixels = (widthFt: number) => {
-    return widthFt / xScaleFtPerPixel;
-  };
-
-  // Calculate plate dimensions in pixels for rendering
-  const plateHeightPixels = Math.abs(getY(pondInvert + plateSize.height) - getY(pondInvert));
-  const plateRenderWidth = getWidthPixels(plateSize.width);
-  const plateRenderX = graphCenterX - plateRenderWidth / 2;
-  const plateRenderY = getY(pondInvert + plateSize.height);
-
-  return (
-    <div className="h-full bg-card border-l border-border flex flex-col shadow-xl relative">
-        <div className="p-4 border-b border-border bg-muted/10 space-y-3">
-            <h3 className="text-sm font-semibold">Outfall Profile</h3>
-            
-            {/* Outfall Style Selector */}
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">Outfall Type</label>
-              <select 
-                value={outfallStyle}
-                onChange={(e) => onStyleChange(e.target.value as OutfallStyle)}
-                className="w-full bg-background border border-input rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-primary outline-none"
-              >
-                <option value="orifice_plate">Orifice Plate</option>
-              </select>
-            </div>
-            
-            {/* Plate Size Inputs */}
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">Plate Size (ft)</label>
-              <div className="flex items-center gap-2">
-                <input 
-                  type="number" 
-                  step="0.5"
-                  value={plateSize.width}
-                  onChange={(e) => onPlateSizeChange({ ...plateSize, width: parseFloat(e.target.value) || 0 })}
-                  className="w-16 bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
-                  placeholder="W"
-                />
-                <span className="text-muted-foreground">×</span>
-                <input 
-                  type="number" 
-                  step="0.5"
-                  value={plateSize.height}
-                  onChange={(e) => onPlateSizeChange({ ...plateSize, height: parseFloat(e.target.value) || 0 })}
-                  className="w-16 bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
-                  placeholder="H"
-                />
-              </div>
-            </div>
-        </div>
-        <div className="flex-1 relative overflow-hidden">
-            <svg width="100%" height="100%" viewBox={`0 0 ${svgWidth} ${svgHeight}`} preserveAspectRatio="xMidYMid meet">
-                {/* Metallic Gradient Definitions */}
-                <defs>
-                  {/* Brushed Steel Gradient */}
-                  <linearGradient id="metallicGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                    <stop offset="0%" stopColor="#4a5568" />
-                    <stop offset="15%" stopColor="#718096" />
-                    <stop offset="30%" stopColor="#a0aec0" />
-                    <stop offset="50%" stopColor="#cbd5e0" />
-                    <stop offset="70%" stopColor="#a0aec0" />
-                    <stop offset="85%" stopColor="#718096" />
-                    <stop offset="100%" stopColor="#4a5568" />
-                  </linearGradient>
-                  
-                  {/* Vertical highlight for 3D effect */}
-                  <linearGradient id="metallicHighlight" x1="0%" y1="0%" x2="0%" y2="100%">
-                    <stop offset="0%" stopColor="#e2e8f0" stopOpacity="0.8" />
-                    <stop offset="20%" stopColor="#cbd5e0" stopOpacity="0.4" />
-                    <stop offset="80%" stopColor="#4a5568" stopOpacity="0.4" />
-                    <stop offset="100%" stopColor="#2d3748" stopOpacity="0.8" />
-                  </linearGradient>
-                  
-                  {/* Pattern for brushed metal texture */}
-                  <pattern id="brushedTexture" width="4" height="4" patternUnits="userSpaceOnUse">
-                    <line x1="0" y1="0" x2="4" y2="0" stroke="#a0aec0" strokeWidth="0.5" opacity="0.3" />
-                    <line x1="0" y1="2" x2="4" y2="2" stroke="#718096" strokeWidth="0.3" opacity="0.2" />
-                  </pattern>
-                  
-                  {/* Combined metallic fill */}
-                  <pattern id="metalPlate" width="100%" height="100%" patternUnits="objectBoundingBox">
-                    <rect width="100%" height="100%" fill="url(#metallicGradient)" />
-                    <rect width="100%" height="100%" fill="url(#brushedTexture)" />
-                  </pattern>
-                </defs>
-                {/* Grid / Ticks */}
-                {ticks.map(tick => (
-                    <g key={tick}>
-                        <line 
-                            x1={padding.left} y1={getY(tick)} 
-                            x2={svgWidth - padding.right} y2={getY(tick)} 
-                            stroke="#e2e8f0" strokeWidth="1" strokeDasharray="4 4" 
-                            className="dark:stroke-slate-700"
-                        />
-                        <text 
-                            x={padding.left - 8} y={getY(tick)} 
-                            fontSize="9" fill="#94a3b8" 
-                            textAnchor="end" alignmentBaseline="middle"
-                        >
-                            {tick.toFixed(1)}'
-                        </text>
-                    </g>
-                ))}
-
-                {/* Pond Bottom */}
-                <line 
-                    x1={padding.left} y1={getY(minEl)} 
-                    x2={svgWidth - padding.right} y2={getY(minEl)} 
-                    stroke="#64748b" strokeWidth="2" 
-                />
-
-                {/* Center Line Indicator (0 position) */}
-                <line 
-                    x1={graphCenterX} y1={padding.top} 
-                    x2={graphCenterX} y2={svgHeight - padding.bottom} 
-                    stroke="#94a3b8" strokeWidth="1" strokeDasharray="2 2" 
-                    opacity="0.5"
-                />
-                <text 
-                    x={graphCenterX} y={padding.top - 5} 
-                    fontSize="9" fill="#64748b" 
-                    textAnchor="middle"
-                    className="font-medium"
-                >
-                    0 (center)
-                </text>
-
-                {/* The Metallic Orifice Plate */}
-                <g>
-                  {/* Main plate body with metallic gradient */}
-                  <rect 
-                    x={plateRenderX} 
-                    y={plateRenderY} 
-                    width={plateRenderWidth} 
-                    height={plateHeightPixels} 
-                    fill="url(#metallicGradient)"
-                    stroke="#4a5568"
-                    strokeWidth="2"
-                  />
-                  
-                  {/* 3D highlight overlay */}
-                  <rect 
-                    x={plateRenderX} 
-                    y={plateRenderY} 
-                    width={plateRenderWidth} 
-                    height={plateHeightPixels} 
-                    fill="url(#metallicHighlight)"
-                  />
-                  
-                  {/* Brushed texture overlay */}
-                  <rect 
-                    x={plateRenderX} 
-                    y={plateRenderY} 
-                    width={plateRenderWidth} 
-                    height={plateHeightPixels} 
-                    fill="url(#brushedTexture)"
-                  />
-                  
-                  {/* Top edge highlight */}
-                  <line 
-                    x1={plateRenderX + 2} 
-                    y1={plateRenderY + 2} 
-                    x2={plateRenderX + plateRenderWidth - 2} 
-                    y2={plateRenderY + 2}
-                    stroke="#e2e8f0"
-                    strokeWidth="1"
-                    opacity="0.6"
-                  />
-                  
-                  {/* Bottom edge shadow */}
-                  <line 
-                    x1={plateRenderX + 2} 
-                    y1={plateRenderY + plateHeightPixels - 2} 
-                    x2={plateRenderX + plateRenderWidth - 2} 
-                    y2={plateRenderY + plateHeightPixels - 2}
-                    stroke="#2d3748"
-                    strokeWidth="1"
-                    opacity="0.6"
-                  />
-                  
-                  {/* Plate label */}
-                  <text 
-                    x={plateRenderX + plateRenderWidth / 2} 
-                    y={plateRenderY - 5}
-                    fontSize="8" 
-                    fill="#94a3b8" 
-                    textAnchor="middle"
-                    fontWeight="bold"
-                  >
-                    {plateSize.width}' × {plateSize.height}' PLATE
-                  </text>
-                </g>
-
-                {/* Structures */}
-                {structures.map(s => {
-                    const offset = s.horizontalOffsetFt || 0;
-                    
-                    if (s.type === 'circular') {
-                        const dia = s.diameterFt || 0;
-                        // Offset is already relative to center (0 = center)
-                        const centerX = getX(offset);
-                        const centerY = getY(s.invertElevation + dia/2);
-                        
-                        // Use Y-scale for vertical diameter (height)
-                        const pixelHeight = Math.abs(getY(s.invertElevation + dia) - getY(s.invertElevation));
-                        const radiusY = pixelHeight / 2;
-                        
-                        // Use X-scale for horizontal diameter (width)
-                        // If scales match, circles stay round; if not, they become ellipses
-                        const pixelWidth = dia / xScaleFtPerPixel;
-                        const radiusX = pixelWidth / 2;
-                        
-                        // Avoid NaN by checking if values are valid
-                        if (isNaN(radiusX) || isNaN(radiusY) || radiusX <= 0 || radiusY <= 0 || isNaN(centerX) || isNaN(centerY)) return null;
-
-                        // Use circle if scales match (within small tolerance), otherwise ellipse
-                        if (Math.abs(radiusX - radiusY) < 0.5) {
-                            return (
-                                <circle 
-                                    key={s.id}
-                                    cx={centerX}
-                                    cy={centerY}
-                                    r={radiusY}
-                                    fill="#1e293b" stroke="white" strokeWidth="1"
-                                    className="dark:fill-black"
-                                />
-                            );
-                        } else {
-                            return (
-                                <ellipse 
-                                    key={s.id}
-                                    cx={centerX}
-                                    cy={centerY}
-                                    rx={radiusX}
-                                    ry={radiusY}
-                                    fill="#1e293b" stroke="white" strokeWidth="1"
-                                    className="dark:fill-black"
-                                />
-                            );
-                        }
-                    } else {
-                        const h = s.heightFt || 0;
-                        const w = s.widthFt || 0;
-                        // Scale height accurately using Y-scale
-                        const pixelHeight = Math.abs(getY(s.invertElevation + h) - getY(s.invertElevation));
-                        // Scale width using X-scale
-                        const pixelWidth = getWidthPixels(w);
-
-                        // Offset is relative to center, so center the rectangle on the offset
-                        const rectX = getX(offset) - pixelWidth / 2;
-                        const rectY = getY(s.invertElevation + h);
-
-                        // Check for NaNs
-                        if (isNaN(pixelHeight) || isNaN(pixelWidth) || isNaN(rectX) || isNaN(rectY) || pixelHeight <= 0 || pixelWidth <= 0) return null;
-
-                        return (
-                            <rect 
-                                key={s.id}
-                                x={rectX}
-                                y={rectY}
-                                width={pixelWidth}
-                                height={pixelHeight}
-                                fill="#1e293b" stroke="white" strokeWidth="1"
-                                className="dark:fill-black"
-                            />
-                        );
-                    }
-                })}
-
-                {/* Overlap Regions - Draw RED zones ON TOP of structures */}
-                {overlaps.map((overlap, idx) => {
-                    // Overlap coordinates are absolute, need to convert to center-relative
-                    // Find center of overlap region
-                    const overlapCenterX = (overlap.x1 + overlap.x2) / 2;
-                    const overlapWidthFt = overlap.x2 - overlap.x1;
-                    
-                    const overlapX1 = getX(overlapCenterX) - getWidthPixels(overlapWidthFt) / 2;
-                    const overlapX2 = getX(overlapCenterX) + getWidthPixels(overlapWidthFt) / 2;
-                    const overlapY1 = getY(overlap.y2); // Top of overlap (lower Y in SVG)
-                    const overlapY2 = getY(overlap.y1); // Bottom of overlap (higher Y in SVG)
-                    
-                    const overlapWidth = overlapX2 - overlapX1;
-                    const overlapHeight = overlapY2 - overlapY1;
-                    
-                    if (isNaN(overlapX1) || isNaN(overlapX2) || isNaN(overlapY1) || isNaN(overlapY2) || overlapWidth <= 0 || overlapHeight <= 0) return null;
-                    
-                    return (
-                        <g key={`overlap-${idx}`}>
-                            {/* Red fill */}
-                            <rect
-                                x={overlapX1}
-                                y={overlapY1}
-                                width={overlapWidth}
-                                height={overlapHeight}
-                                fill="#ef4444"
-                                fillOpacity="0.5"
-                            />
-                            {/* Red border */}
-                            <rect
-                                x={overlapX1}
-                                y={overlapY1}
-                                width={overlapWidth}
-                                height={overlapHeight}
-                                fill="none"
-                                stroke="#dc2626"
-                                strokeWidth="2"
-                                strokeDasharray="4 2"
-                            />
-                        </g>
-                    );
-                })}
-
-                {/* Water Levels */}
-                {wseList.map((wse, i) => (
-                    <g key={wse.label}>
-                        {wse.isTopLine ? (
-                          <>
-                            {/* Pond Top Line - thick solid line */}
-                            <line 
-                                x1={padding.left} y1={getY(wse.elevation)} 
-                                x2={svgWidth - padding.right} y2={getY(wse.elevation)} 
-                                stroke={wse.color} strokeWidth="3"
-                                opacity="1"
-                            />
-                            <text 
-                                x={padding.left + 2} y={getY(wse.elevation) - 4} 
-                                fontSize="9" fill={wse.color} fontWeight="bold"
-                                textAnchor="start"
-                            >
-                                POND TOP
-                            </text>
-                          </>
-                        ) : (
-                          <>
-                            <line 
-                                x1={padding.left} y1={getY(wse.elevation)} 
-                                x2={svgWidth - padding.right} y2={getY(wse.elevation)} 
-                                stroke={wse.color} strokeWidth="2" strokeDasharray={wse.isPassing ? "" : "5 2"}
-                                opacity="0.8"
-                            />
-                            <text 
-                                x={svgWidth - padding.right} y={getY(wse.elevation) - 4} 
-                                fontSize="10" fill={wse.color} fontWeight="bold"
-                                textAnchor="end"
-                            >
-                                {wse.label}
-                            </text>
-                          </>
-                        )}
-                    </g>
-                ))}
-
-            </svg>
-        </div>
-    </div>
-  );
-}
-
+import { StageStorageCurve, getElevationAtVolume } from '@/utils/stageStorage';
+import type { PondMode } from '../page';
+import OutfallProfileSVG, { OutfallStyle } from './outfall/OutfallProfileSVG';
 
 interface PondDims {
   length: number;
@@ -470,6 +19,8 @@ interface OutfallDesignerProps {
   results: ModifiedRationalResult[];
   pondDims: PondDims;
   pondInvertElevation?: number;
+  pondMode?: PondMode;
+  stageStorageCurve?: StageStorageCurve | null;
 }
 
 // LocalStorage keys for persistence
@@ -478,10 +29,12 @@ const STORAGE_KEY_PLATE_SIZE = 'outfallDesigner_plateSize';
 const STORAGE_KEY_OUTFALL_STYLE = 'outfallDesigner_outfallStyle';
 const STORAGE_KEY_TAILWATER = 'outfallDesigner_tailwater';
 
-export default function OutfallDesigner({ results, pondDims, pondInvertElevation = 0 }: OutfallDesignerProps) {
+export default function OutfallDesigner({ results, pondDims, pondInvertElevation = 0, pondMode = 'generic', stageStorageCurve }: OutfallDesignerProps) {
   // Calculate derived pond values
   const pondAreaSqFt = pondDims.length * pondDims.width;
-  const pondTopElevation = pondInvertElevation + pondDims.depth;
+  const pondTopElevation = pondMode === 'custom' && stageStorageCurve && stageStorageCurve.points.length > 0
+    ? stageStorageCurve.points[stageStorageCurve.points.length - 1].elevation
+    : pondInvertElevation + pondDims.depth;
   
   // Helper to get initial structures from localStorage or default
   const getInitialStructures = (): OutfallStructure[] => {
@@ -782,6 +335,10 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
 
   // --- Helper: Calculate WSE from Volume ---
   const getWSE = (volumeCf: number) => {
+    // Use stage-storage curve interpolation in custom mode
+    if (pondMode === 'custom' && stageStorageCurve && stageStorageCurve.points.length >= 2) {
+      return getElevationAtVolume(stageStorageCurve, volumeCf);
+    }
     // Simple Prism Assumption: Depth = Vol / Area
     // WSE = Invert + Depth
     return pondInvertElevation + (volumeCf / pondAreaSqFt);
@@ -881,7 +438,7 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
               <ul className="mt-2 text-xs text-muted-foreground list-disc list-inside space-y-1">
                 {overlaps.map((overlap, idx) => (
                   <li key={idx}>
-                    Stages {overlap.structures.join(' & ')} overlap horizontally at {overlap.x1.toFixed(2)}' - {overlap.x2.toFixed(2)}' (elevation {overlap.y1.toFixed(2)}' - {overlap.y2.toFixed(2)}')
+                    Stages {overlap.structures.join(' & ')} overlap horizontally at {overlap.x1.toFixed(2)}&apos; - {overlap.x2.toFixed(2)}&apos; (elevation {overlap.y1.toFixed(2)}&apos; - {overlap.y2.toFixed(2)}&apos;)
                   </li>
                 ))}
               </ul>
@@ -986,10 +543,14 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                       }`}>
                         <div className="flex items-center justify-end gap-1">
                           {data.submergenceLevel === 'full' && (
-                            <Waves className="w-3 h-3 text-red-400" title="Fully submerged - tailwater above top of opening" />
+                            <span title="Fully submerged - tailwater above top of opening">
+                              <Waves className="w-3 h-3 text-red-400" />
+                            </span>
                           )}
                           {data.submergenceLevel === 'partial' && (
-                            <Waves className="w-3 h-3 text-amber-400" title="Partially submerged - tailwater in opening" />
+                            <span title="Partially submerged - tailwater in opening">
+                              <Waves className="w-3 h-3 text-amber-400" />
+                            </span>
                           )}
                           {data.totalDischarge.toFixed(2)}
                         </div>
@@ -1002,7 +563,9 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                             <XCircle className="w-4 h-4 text-red-500" />
                           )}
                           {!data.hasAdequateFreeboard && (
-                            <AlertTriangle className="w-4 h-4 text-amber-500" title="Insufficient freeboard" />
+                            <span title="Insufficient freeboard">
+                              <AlertTriangle className="w-4 h-4 text-amber-500" />
+                            </span>
                           )}
                         </div>
                       </td>
@@ -1132,6 +695,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                   updateStructure(s.id, 'invertElevation', (s.invertElevation || 0) + 0.01);
                                 }}
                                 className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
+                                title="Increase invert elevation"
+                                aria-label="Increase invert elevation"
                               >
                                 <ChevronUpIcon className="w-3 h-3 text-gray-400" />
                               </button>
@@ -1153,6 +718,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                   }
                                 }}
                                 className="w-20 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                                title="Invert elevation (ft)"
+                                aria-label="Invert elevation (ft)"
                               />
                               <button
                                 type="button"
@@ -1161,6 +728,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                   updateStructure(s.id, 'invertElevation', (s.invertElevation || 0) - 0.01);
                                 }}
                                 className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
+                                title="Decrease invert elevation"
+                                aria-label="Decrease invert elevation"
                               >
                                 <ChevronDownIcon className="w-3 h-3 text-gray-400" />
                               </button>
@@ -1215,6 +784,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                 updateStructure(s.id, 'horizontalOffsetFt', (s.horizontalOffsetFt || 0) + 0.01);
                               }}
                               className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
+                              title="Increase horizontal offset"
+                              aria-label="Increase horizontal offset"
                             >
                               <ChevronUpIcon className="w-3 h-3 text-gray-400" />
                             </button>
@@ -1236,6 +807,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                 }
                               }}
                               className="w-16 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                              title="Horizontal offset (ft)"
+                              aria-label="Horizontal offset (ft)"
                             />
                             <button
                               type="button"
@@ -1244,6 +817,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                 updateStructure(s.id, 'horizontalOffsetFt', (s.horizontalOffsetFt || 0) - 0.01);
                               }}
                               className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
+                              title="Decrease horizontal offset"
+                              aria-label="Decrease horizontal offset"
                             >
                               <ChevronDownIcon className="w-3 h-3 text-gray-400" />
                             </button>
@@ -1254,6 +829,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                             value={s.type}
                             onChange={e => updateStructure(s.id, 'type', e.target.value as OutfallStructureType)}
                             className="bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none"
+                            title="Structure type"
+                            aria-label="Structure type"
                           >
                             <option value="circular">Circular</option>
                             <option value="rectangular">Rectangular</option>
@@ -1272,6 +849,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                       updateStructure(s.id, 'diameterFt', Math.max(0.01, (s.diameterFt || 0) + 0.01));
                                     }}
                                     className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
+                                    title="Increase diameter"
+                                    aria-label="Increase diameter"
                                   >
                                     <ChevronUpIcon className="w-3 h-3 text-gray-400" />
                                   </button>
@@ -1293,6 +872,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                       }
                                     }}
                                     className="w-14 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                                    title="Diameter (ft)"
+                                    aria-label="Diameter (ft)"
                                   />
                                   <button
                                     type="button"
@@ -1301,6 +882,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                       updateStructure(s.id, 'diameterFt', Math.max(0.01, (s.diameterFt || 0) - 0.01));
                                     }}
                                     className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
+                                    title="Decrease diameter"
+                                    aria-label="Decrease diameter"
                                   >
                                     <ChevronDownIcon className="w-3 h-3 text-gray-400" />
                                   </button>
@@ -1319,6 +902,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                         updateStructure(s.id, 'widthFt', Math.max(0.01, (s.widthFt || 0) + 0.01));
                                       }}
                                       className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
+                                      title="Increase width"
+                                      aria-label="Increase width"
                                     >
                                       <ChevronUpIcon className="w-3 h-3 text-gray-400" />
                                     </button>
@@ -1340,6 +925,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                         }
                                       }}
                                       className="w-12 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                                      title="Width (ft)"
+                                      aria-label="Width (ft)"
                                     />
                                     <button
                                       type="button"
@@ -1348,6 +935,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                         updateStructure(s.id, 'widthFt', Math.max(0.01, (s.widthFt || 0) - 0.01));
                                       }}
                                       className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
+                                      title="Decrease width"
+                                      aria-label="Decrease width"
                                     >
                                       <ChevronDownIcon className="w-3 h-3 text-gray-400" />
                                     </button>
@@ -1364,6 +953,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                         updateStructure(s.id, 'heightFt', Math.max(0.01, (s.heightFt || 0) + 0.01));
                                       }}
                                       className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
+                                      title="Increase height"
+                                      aria-label="Increase height"
                                     >
                                       <ChevronUpIcon className="w-3 h-3 text-gray-400" />
                                     </button>
@@ -1385,6 +976,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                         }
                                       }}
                                       className="w-12 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                                      title="Height (ft)"
+                                      aria-label="Height (ft)"
                                     />
                                     <button
                                       type="button"
@@ -1393,6 +986,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                         updateStructure(s.id, 'heightFt', Math.max(0.01, (s.heightFt || 0) - 0.01));
                                       }}
                                       className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
+                                      title="Decrease height"
+                                      aria-label="Decrease height"
                                     >
                                       <ChevronDownIcon className="w-3 h-3 text-gray-400" />
                                     </button>
@@ -1412,6 +1007,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                 updateStructure(s.id, 'dischargeCoefficient', Math.max(0, (s.dischargeCoefficient || 0) + 0.01));
                               }}
                               className="p-0.5 hover:bg-primary/20 rounded-t transition-colors flex justify-center"
+                              title="Increase discharge coefficient"
+                              aria-label="Increase discharge coefficient"
                             >
                               <ChevronUpIcon className="w-3 h-3 text-gray-400" />
                             </button>
@@ -1433,6 +1030,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                 }
                               }}
                               className="w-14 bg-background border-x border-input px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                              title="Discharge coefficient"
+                              aria-label="Discharge coefficient"
                             />
                             <button
                               type="button"
@@ -1441,6 +1040,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                                 updateStructure(s.id, 'dischargeCoefficient', Math.max(0, (s.dischargeCoefficient || 0) - 0.01));
                               }}
                               className="p-0.5 hover:bg-primary/20 rounded-b transition-colors flex justify-center"
+                              title="Decrease discharge coefficient"
+                              aria-label="Decrease discharge coefficient"
                             >
                               <ChevronDownIcon className="w-3 h-3 text-gray-400" />
                             </button>
@@ -1463,6 +1064,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                           <button 
                             onClick={() => removeStructure(s.id)}
                             className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                            title="Remove structure"
+                            aria-label="Remove structure"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -1603,7 +1206,7 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
         </div>
         
         <div className="flex-1 pl-2">
-          <OutfallProfile 
+          <OutfallProfileSVG 
             structures={structures} 
             pondInvert={pondInvertElevation} 
             wseList={wseVisList}
@@ -1632,6 +1235,8 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
               <button
                 onClick={() => setSolverError(null)}
                 className="p-1 hover:bg-background rounded transition-colors"
+                title="Close"
+                aria-label="Close"
               >
                 <X className="w-4 h-4 text-gray-400" />
               </button>
@@ -1687,11 +1292,5 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
 function SettingsIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
-  )
-}
-
-function CalculatorIcon(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="16" height="20" x="4" y="2" rx="2"/><line x1="8" x2="16" y1="6" y2="6"/><line x1="16" x2="16" y1="14" y2="18"/><path d="M16 10h.01"/><path d="M12 10h.01"/><path d="M8 10h.01"/><path d="M12 14h.01"/><path d="M8 14h.01"/><path d="M12 18h.01"/><path d="M8 18h.01"/></svg>
   )
 }

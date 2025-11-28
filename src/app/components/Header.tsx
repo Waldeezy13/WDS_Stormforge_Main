@@ -1,8 +1,8 @@
 import React from 'react';
 import Link from 'next/link';
-import { Droplets, Waves, Construction, CloudRain, Calculator, Settings } from 'lucide-react';
+import { Waves, Construction, CloudRain, Calculator, Settings, FileText } from 'lucide-react';
 
-export type Tab = 'hydrology' | 'pond' | 'drainage' | 'outfall';
+export type Tab = 'hydrology' | 'pond' | 'drainage' | 'outfall' | 'reports';
 
 interface HeaderProps {
   activeTab: Tab;
@@ -12,11 +12,11 @@ interface HeaderProps {
 export default function Header({ activeTab, onTabChange }: HeaderProps) {
   return (
     <header className="w-full border-b border-border bg-card/50 backdrop-blur-md sticky top-0 z-50 h-16 flex-none">
-      <div className="container mx-auto px-6 h-full flex items-center justify-between">
+      <div className="w-full px-6 h-full flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Waves className="w-8 h-8 text-accent" />
           <h1 className="text-xl font-bold tracking-tight text-white">
-            Waldo Pond <span className="text-accent">Designer</span>
+            WDS <span className="text-accent">Stormforge</span>
           </h1>
         </div>
         <div className="flex items-center gap-6">
@@ -64,6 +64,17 @@ export default function Header({ activeTab, onTabChange }: HeaderProps) {
             >
               <Construction className="w-4 h-4" />
               Outfall Design
+            </button>
+            <button 
+              onClick={() => onTabChange('reports')}
+              className={`text-sm font-medium transition-colors flex items-center gap-2 ${
+                activeTab === 'reports' 
+                  ? 'text-accent' 
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <FileText className="w-4 h-4" />
+              Reports
             </button>
           </nav>
           <Link

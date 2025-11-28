@@ -47,11 +47,17 @@ export async function GET(
       intensities[row.return_period as ReturnPeriod] = row.intensity_in_per_hr;
     }
 
-    // Standard durations to always return (even if no data)
+    // Get all unique durations from the database (not just standard ones)
+    const allDurations = Array.from(dataMap.keys()).sort((a, b) => a - b);
+    
+    // Also include standard durations even if no data exists (for consistency)
     const standardDurations = [5, 10, 15, 30, 60, 120, 180, 360, 720, 1440];
     const standardReturnPeriods: ReturnPeriod[] = ['2yr', '5yr', '10yr', '25yr', '50yr', '100yr'];
     
-    const rainfallData: RainfallData[] = standardDurations.map(durationMinutes => {
+    // Combine all durations (database durations + standard durations), removing duplicates
+    const uniqueDurations = Array.from(new Set([...allDurations, ...standardDurations])).sort((a, b) => a - b);
+    
+    const rainfallData: RainfallData[] = uniqueDurations.map(durationMinutes => {
       const intensities = dataMap.get(durationMinutes) || {
         '2yr': 0,
         '5yr': 0,
