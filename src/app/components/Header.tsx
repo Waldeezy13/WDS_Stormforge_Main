@@ -23,6 +23,7 @@ export default function Header({ activeTab, onTabChange }: HeaderProps) {
           <nav className="flex gap-6">
             <button 
               onClick={() => onTabChange('hydrology')}
+              aria-label="Navigate to Hydrology tab"
               className={`text-sm font-medium transition-colors flex items-center gap-2 ${
                 activeTab === 'hydrology' 
                   ? 'text-accent' 
@@ -34,6 +35,7 @@ export default function Header({ activeTab, onTabChange }: HeaderProps) {
             </button>
             <button 
               onClick={() => onTabChange('drainage')}
+              aria-label="Navigate to Drainage Area tab"
               className={`text-sm font-medium transition-colors flex items-center gap-2 ${
                 activeTab === 'drainage' 
                   ? 'text-accent' 
@@ -45,6 +47,7 @@ export default function Header({ activeTab, onTabChange }: HeaderProps) {
             </button>
             <button 
               onClick={() => onTabChange('pond')}
+              aria-label="Navigate to Pond Design tab"
               className={`text-sm font-medium transition-colors flex items-center gap-2 ${
                 activeTab === 'pond' 
                   ? 'text-accent' 
@@ -56,6 +59,7 @@ export default function Header({ activeTab, onTabChange }: HeaderProps) {
             </button>
             <button 
               onClick={() => onTabChange('outfall')}
+              aria-label="Navigate to Outfall Design tab"
               className={`text-sm font-medium transition-colors flex items-center gap-2 ${
                 activeTab === 'outfall' 
                   ? 'text-accent' 
@@ -67,6 +71,7 @@ export default function Header({ activeTab, onTabChange }: HeaderProps) {
             </button>
             <button 
               onClick={() => onTabChange('reports')}
+              aria-label="Navigate to Reports tab"
               className={`text-sm font-medium transition-colors flex items-center gap-2 ${
                 activeTab === 'reports' 
                   ? 'text-accent' 

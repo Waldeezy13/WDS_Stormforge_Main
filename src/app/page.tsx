@@ -160,7 +160,7 @@ export default function Home() {
           <div className="text-gray-400">
             Source:{' '}
             <span className="font-semibold">
-              NOAA Atlas 14
+              {selectedCity?.source || 'N/A'}
             </span>
           </div>
         </div>

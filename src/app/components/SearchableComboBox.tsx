@@ -159,6 +159,7 @@ export default function SearchableComboBox({
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
+        aria-label="Select city dropdown"
         className="w-full bg-background border border-border rounded px-4 py-3 text-base focus:ring-2 focus:ring-primary outline-none transition-all cursor-pointer hover:border-primary/50 text-left flex items-center justify-between"
       >
         <span className={selectedOption ? 'text-foreground' : 'text-gray-500'}>
@@ -171,7 +172,7 @@ export default function SearchableComboBox({
 
       {/* Dropdown */}
       {isOpen && (
-        <div className="absolute z-50 w-full mt-1 bg-background border border-border rounded shadow-lg overflow-hidden">
+        <div className="absolute z-30 w-full mt-1 bg-background border border-border rounded shadow-lg overflow-hidden">
           {/* Search input */}
           <div className="p-2 border-b border-border">
             <div className="relative">
@@ -183,6 +184,7 @@ export default function SearchableComboBox({
                 onChange={(e) => setSearchTerm(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Search cities..."
+                aria-label="Search cities"
                 className="w-full bg-slate-900/50 border border-border rounded pl-9 pr-3 py-2 text-sm focus:ring-2 focus:ring-primary focus:border-primary outline-none placeholder:text-gray-500"
               />
             </div>
@@ -257,6 +259,7 @@ export default function SearchableComboBox({
                             disabled={refreshingId === option.id}
                             className="mr-3 p-1.5 rounded hover:bg-slate-700 transition-colors disabled:opacity-50"
                             title="Refresh data from NOAA"
+                            aria-label="Refresh data from NOAA"
                           >
                             {refreshingId === option.id ? (
                               <Loader2 className="w-4 h-4 animate-spin text-primary" />

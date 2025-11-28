@@ -291,6 +291,7 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
               <button
                 key={event}
                 onClick={() => toggleEvent(event)}
+                aria-label={`Toggle ${event} storm event`}
                 className={`px-3 py-2 rounded border text-sm font-medium transition-all ${
                   selectedEvents.includes(event)
                     ? 'bg-primary/20 border-primary text-primary'
@@ -334,6 +335,7 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
                 placeholder="e.g., 33.0198"
                 value={fetchLat}
                 onChange={(e) => setFetchLat(e.target.value)}
+                aria-label="Latitude coordinate"
                 className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
             </div>
@@ -345,6 +347,7 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
                 placeholder="e.g., -96.6989"
                 value={fetchLon}
                 onChange={(e) => setFetchLon(e.target.value)}
+                aria-label="Longitude coordinate"
                 className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
             </div>
@@ -355,6 +358,7 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
                 placeholder="e.g., Plano"
                 value={fetchName}
                 onChange={(e) => setFetchName(e.target.value)}
+                aria-label="Location name"
                 className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
             </div>
@@ -366,6 +370,7 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
                 maxLength={2}
                 value={fetchState}
                 onChange={(e) => setFetchState(e.target.value.toUpperCase())}
+                aria-label="State abbreviation"
                 className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none uppercase"
               />
             </div>
@@ -511,6 +516,7 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
         <div className="flex flex-col sm:flex-row gap-3">
           <button
             onClick={() => setInterpolationMethod('log-log')}
+            aria-label="Select Log-Log interpolation method"
             className={`px-4 py-3 rounded-lg border text-sm font-medium transition-all text-left flex-1 ${
               interpolationMethod === 'log-log'
                 ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400'
@@ -524,6 +530,7 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
           </button>
           <button
             onClick={() => setInterpolationMethod('linear')}
+            aria-label="Select Linear interpolation method"
             className={`px-4 py-3 rounded-lg border text-sm font-medium transition-all text-left flex-1 ${
               interpolationMethod === 'linear'
                 ? 'bg-amber-500/20 border-amber-500 text-amber-400'

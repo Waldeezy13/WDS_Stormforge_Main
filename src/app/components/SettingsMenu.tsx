@@ -43,7 +43,7 @@ export default function SettingsMenu() {
       // Transform the data to include dataCount
       const transformedData: Record<string, CityWithData[]> = {};
       for (const [state, stateCities] of Object.entries(data)) {
-        transformedData[state] = (stateCities as { dataCount?: number }[]).map(city => ({
+        transformedData[state] = (stateCities as CityWithData[]).map(city => ({
           ...city,
           dataCount: city.dataCount || 0
         }));
@@ -166,6 +166,7 @@ export default function SettingsMenu() {
                             disabled={deleting === city.id}
                             className="ml-2 p-1.5 text-red-400 hover:bg-red-500/20 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             title={`Delete ${city.name}, ${city.state}`}
+                            aria-label={`Delete ${city.name}, ${city.state}`}
                           >
                             {deleting === city.id ? (
                               <Loader2 className="w-4 h-4 animate-spin" />

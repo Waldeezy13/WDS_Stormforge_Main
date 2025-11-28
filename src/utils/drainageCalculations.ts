@@ -1,5 +1,26 @@
 import { getIntensity, ReturnPeriod } from '@/utils/atlas14';
 
+/**
+ * Source tracking for imported drainage areas.
+ * Enables traceability back to Civil 3D and stores extended CAD properties.
+ */
+export interface DrainageImportSource {
+  type: 'C3D' | 'MANUAL';
+  parcelHandle?: string;      // Civil 3D object handle for linking back
+  daId?: string;              // WD_Drainage property set ID
+  importedAt?: string;        // ISO timestamp of import
+  sourceFile?: string;        // Original export filename
+  sourceDrawing?: string;     // DWG filename
+  // Extended properties from Civil 3D
+  landUse?: string;
+  soilGroup?: string;
+  pctImpervious?: number;
+  targetNodeId?: string;
+  hydroMethod?: string;
+  designStormYR?: number;
+  notes?: string;
+}
+
 export interface DrainageArea {
   id: string;
   type: 'existing' | 'proposed';
@@ -8,6 +29,7 @@ export interface DrainageArea {
   cFactor: number;
   tcMinutes: number;
   isIncluded: boolean; // Toggle for inclusion in calculations
+  importSource?: DrainageImportSource; // Optional import tracking
 }
 
 export interface DrainageResult {

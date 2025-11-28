@@ -224,6 +224,7 @@ export default function Atlas14Import() {
                 <button 
                   onClick={() => setShowDebug(!showDebug)}
                   className="flex items-center gap-1 text-gray-400 hover:text-gray-200 w-full"
+                  aria-label="Toggle technical debug details"
                 >
                   {showDebug ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                   Technical Details (Debug Info)

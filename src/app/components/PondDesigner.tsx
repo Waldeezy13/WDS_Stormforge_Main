@@ -1199,6 +1199,7 @@ export default function PondDesigner({
             <div className="flex bg-slate-800 rounded-lg p-1">
               <button
                 onClick={() => onPondModeChange('generic')}
+                aria-label="Use generic rectangular pond mode"
                 className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                   pondMode === 'generic' 
                     ? 'bg-primary text-white' 
@@ -1210,6 +1211,7 @@ export default function PondDesigner({
               </button>
               <button
                 onClick={() => onPondModeChange('custom')}
+                aria-label="Use custom stage-storage table mode"
                 className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                   pondMode === 'custom' 
                     ? 'bg-primary text-white' 
@@ -1244,6 +1246,7 @@ export default function PondDesigner({
                   className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
                   placeholder="Length"
                   title="Pond length in feet"
+                  aria-label="Pond length in feet"
                 />
               </div>
               <div>
@@ -1255,6 +1258,7 @@ export default function PondDesigner({
                   className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
                   placeholder="Width"
                   title="Pond width in feet"
+                  aria-label="Pond width in feet"
                 />
               </div>
               <div>
@@ -1266,6 +1270,7 @@ export default function PondDesigner({
                   className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
                   placeholder="Depth"
                   title="Pond depth in feet"
+                  aria-label="Pond depth in feet"
                 />
               </div>
             </div>
@@ -1317,6 +1322,7 @@ export default function PondDesigner({
                 }}
                 placeholder="Enter pond name"
                 title="Pond name for identification"
+                aria-label="Pond name for identification"
                 className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
               />
             </div>
@@ -1332,6 +1338,7 @@ export default function PondDesigner({
                 onChange={(e) => setCsvPasteText(e.target.value)}
                 placeholder="Paste CSV data here (comma or tab separated)..."
                 title="Paste stage-storage CSV data"
+                aria-label="Paste stage-storage CSV data"
                 className="w-full h-20 bg-background border border-border rounded px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-primary outline-none resize-none"
               />
               <button

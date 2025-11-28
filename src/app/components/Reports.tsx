@@ -278,6 +278,7 @@ export default function Reports({
         <div className="flex gap-3">
           <button
             onClick={handleExportExcel}
+            aria-label="Export CSV"
             className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
           >
             <FileSpreadsheet className="w-4 h-4" />
@@ -285,6 +286,7 @@ export default function Reports({
           </button>
           <button
             onClick={handlePrint}
+            aria-label="Print or save as PDF"
             className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
           >
             <Printer className="w-4 h-4" />
@@ -312,6 +314,7 @@ export default function Reports({
               value={projectName}
               onChange={(e) => setProjectName(e.target.value)}
               placeholder="Project Name"
+              aria-label="Project name"
               className="flex-1 border-b border-gray-400 bg-transparent outline-none print:border-0"
             />
           </div>
@@ -322,6 +325,7 @@ export default function Reports({
               value={projectNumber}
               onChange={(e) => setProjectNumber(e.target.value)}
               placeholder="Project Number"
+              aria-label="Project number"
               className="flex-1 border-b border-gray-400 bg-transparent outline-none print:border-0"
             />
           </div>
@@ -332,6 +336,7 @@ export default function Reports({
               value={engineerName}
               onChange={(e) => setEngineerName(e.target.value)}
               placeholder="Engineer Name"
+              aria-label="Engineer name"
               className="flex-1 border-b border-gray-400 bg-transparent outline-none print:border-0"
             />
           </div>

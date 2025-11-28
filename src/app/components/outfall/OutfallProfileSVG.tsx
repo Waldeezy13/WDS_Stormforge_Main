@@ -129,6 +129,7 @@ export default function OutfallProfileSVG({
                 onChange={(e) => onStyleChange(e.target.value as OutfallStyle)}
                 className="w-full bg-background border border-input rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-primary outline-none"
                 title="Select outfall structure type"
+                aria-label="Select outfall structure type"
               >
                 <option value="orifice_plate">Orifice Plate</option>
               </select>
@@ -145,6 +146,7 @@ export default function OutfallProfileSVG({
                   onChange={(e) => onPlateSizeChange({ ...plateSize, width: parseFloat(e.target.value) || 0 })}
                   className="w-16 bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
                   placeholder="W"
+                  aria-label="Plate width in feet"
                 />
                 <span className="text-muted-foreground">×</span>
                 <input 
@@ -154,6 +156,7 @@ export default function OutfallProfileSVG({
                   onChange={(e) => onPlateSizeChange({ ...plateSize, height: parseFloat(e.target.value) || 0 })}
                   className="w-16 bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
                   placeholder="H"
+                  aria-label="Plate height in feet"
                 />
               </div>
             </div>

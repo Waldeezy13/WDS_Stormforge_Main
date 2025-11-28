@@ -1,16 +1,12 @@
 'use client';
 
-
-
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-
-import { Plus, Trash2, Calculator, Table as TableIcon, ArrowRight, Waves } from 'lucide-react';
-
+import { Plus, Trash2, Calculator, Table as TableIcon, ArrowRight, Waves, Upload, FileJson } from 'lucide-react';
 import { ReturnPeriod } from '@/utils/atlas14';
-
 import type { DrainageArea } from '@/utils/drainageCalculations';
-
 import { RationalMethod } from '@/utils/drainageCalculations';
+import DrainageImport from './DrainageImport';
+import { getImportMetadata, DrainageImportInfo } from '@/utils/stormforgeImport';
 
 
 
@@ -45,6 +41,14 @@ interface DrainageProps {
 
 export default function Drainage({ cityId, selectedEvents, onTotalsChange }: DrainageProps) {
   // --- State ---
+  const [importModalType, setImportModalType] = useState<'existing' | 'proposed' | null>(null);
+  
+  // Load import metadata directly during initialization (no effect needed)
+  const [importMeta, setImportMeta] = useState<{ existing: DrainageImportInfo | null; proposed: DrainageImportInfo | null }>(() => {
+    if (typeof window === 'undefined') return { existing: null, proposed: null };
+    return getImportMetadata();
+  });
+
   const [areas, setAreas] = useState<DrainageArea[]>(() => {
     if (typeof window === 'undefined') {
       return DEFAULT_AREAS;
@@ -261,35 +265,50 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
 
 
 
+  // Handle import completion
+  const handleImportComplete = useCallback((newAreas: DrainageArea[]) => {
+    setAreas(newAreas);
+    setImportMeta(getImportMetadata());
+  }, []);
+
   // Helper to render a section table
-
-  const renderSection = (title: string, type: 'existing' | 'proposed', totals: ReturnType<typeof calculateTotals>) => (
-
-    <div className="bg-card border border-border rounded-lg shadow-lg overflow-hidden flex flex-col mb-8">
-
-       <div className="px-6 py-4 border-b border-border bg-slate-900/50 flex justify-between items-center">
-
-          <h3 className="font-semibold text-lg text-white flex items-center gap-2">
-
-             {type === 'existing' ? <TableIcon className="w-5 h-5 text-gray-400" /> : <TableIcon className="w-5 h-5 text-primary" />}
-
-             {title}
-
-          </h3>
-
-          <button 
-
-            onClick={() => addArea(type)}
-
-            className="flex items-center gap-1 bg-slate-800 hover:bg-slate-700 border border-border text-xs px-3 py-1.5 rounded transition-colors"
-
-          >
-
-            <Plus className="w-3 h-3" /> Add Area
-
-          </button>
-
-       </div>
+  const renderSection = (title: string, type: 'existing' | 'proposed', totals: ReturnType<typeof calculateTotals>) => {
+    const meta = importMeta[type];
+    
+    return (
+      <div className="bg-card border border-border rounded-lg shadow-lg overflow-hidden flex flex-col mb-8">
+        <div className="px-6 py-4 border-b border-border bg-slate-900/50 flex justify-between items-center">
+          <div className="flex items-center gap-3">
+            <h3 className="font-semibold text-lg text-white flex items-center gap-2">
+              {type === 'existing' ? <TableIcon className="w-5 h-5 text-gray-400" /> : <TableIcon className="w-5 h-5 text-primary" />}
+              {title}
+            </h3>
+            {meta && (
+              <div className="flex items-center gap-1.5 px-2 py-1 bg-primary/10 border border-primary/30 rounded text-xs text-primary" title={`Imported from ${meta.sourceDrawing || meta.sourceFile} on ${new Date(meta.importedAt).toLocaleDateString()}`}>
+                <FileJson className="w-3 h-3" />
+                <span>{meta.itemCount} from C3D</span>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => setImportModalType(type)}
+              className="flex items-center gap-1 bg-primary/10 hover:bg-primary/20 border border-primary/30 text-primary text-xs px-3 py-1.5 rounded transition-colors"
+              title={`Import ${type} drainage areas from Civil 3D`}
+              aria-label={`Import ${type} drainage areas from Civil 3D`}
+            >
+              <Upload className="w-3 h-3" /> Import C3D
+            </button>
+            <button 
+              onClick={() => addArea(type)}
+              className="flex items-center gap-1 bg-slate-800 hover:bg-slate-700 border border-border text-xs px-3 py-1.5 rounded transition-colors"
+              title={`Add new ${type} drainage area`}
+              aria-label={`Add new ${type} drainage area`}
+            >
+              <Plus className="w-3 h-3" /> Add Area
+            </button>
+          </div>
+        </div>
 
        
 
@@ -546,14 +565,11 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
                 </tr>
 
             </tfoot>
-
           </table>
-
-       </div>
-
-    </div>
-
-  );
+        </div>
+      </div>
+    );
+  };
 
 
 
@@ -624,10 +640,17 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
 
 
   return (
-
     <div className="p-8 h-full flex flex-col max-w-[1600px] mx-auto overflow-y-auto">
-
       
+      {/* Import Modal */}
+      {importModalType && (
+        <DrainageImport
+          targetType={importModalType}
+          currentAreas={areas}
+          onImport={handleImportComplete}
+          onClose={() => setImportModalType(null)}
+        />
+      )}
 
       <div className="flex items-center justify-between mb-8">
 
@@ -668,12 +691,8 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
       {/* Proposed Conditions Table */}
 
       {renderSection('Proposed Drainage Areas', 'proposed', proposedTotals)}
-
       
-
     </div>
-
   );
-
 }
 
