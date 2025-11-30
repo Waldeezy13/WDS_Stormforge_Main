@@ -1,4 +1,5 @@
 import { getIntensity, ReturnPeriod } from '@/utils/atlas14';
+import type { DrainageAreaExportDto } from '@/utils/stormforgeImport';
 
 /**
  * Source tracking for imported drainage areas.
@@ -19,6 +20,8 @@ export interface DrainageImportSource {
   hydroMethod?: string;
   designStormYR?: number;
   notes?: string;
+  // Preserve full C3D data for round-trip export
+  rawC3DData?: DrainageAreaExportDto;
 }
 
 export interface DrainageArea {

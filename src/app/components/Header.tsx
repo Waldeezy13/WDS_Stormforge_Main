@@ -1,15 +1,17 @@
 import React from 'react';
 import Link from 'next/link';
-import { Waves, Construction, CloudRain, Calculator, Settings, FileText } from 'lucide-react';
+import { Waves, Construction, CloudRain, Calculator, Settings, FileText, FolderOpen, Download } from 'lucide-react';
 
 export type Tab = 'hydrology' | 'pond' | 'drainage' | 'outfall' | 'reports';
 
 interface HeaderProps {
   activeTab: Tab;
   onTabChange: (tab: Tab) => void;
+  onProjectImport?: () => void;
+  onExportToC3D?: () => void;
 }
 
-export default function Header({ activeTab, onTabChange }: HeaderProps) {
+export default function Header({ activeTab, onTabChange, onProjectImport, onExportToC3D }: HeaderProps) {
   return (
     <header className="w-full border-b border-border bg-card/50 backdrop-blur-md sticky top-0 z-50 h-16 flex-none">
       <div className="w-full px-6 h-full flex items-center justify-between">
@@ -18,6 +20,30 @@ export default function Header({ activeTab, onTabChange }: HeaderProps) {
           <h1 className="text-xl font-bold tracking-tight text-white">
             WDS <span className="text-accent">Stormforge</span>
           </h1>
+          <div className="flex items-center gap-2 ml-4 border-l border-border pl-4">
+            {onProjectImport && (
+              <button
+                onClick={onProjectImport}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 hover:bg-primary/20 border border-primary/30 text-primary text-xs font-medium rounded-lg transition-colors"
+                title="Import project from Civil 3D"
+                aria-label="Import project from Civil 3D"
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+                New from C3D
+              </button>
+            )}
+            {onExportToC3D && (
+              <button
+                onClick={onExportToC3D}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 hover:bg-primary/20 border border-primary/30 text-primary text-xs font-medium rounded-lg transition-colors"
+                title="Export drainage areas to Civil 3D"
+                aria-label="Export drainage areas to Civil 3D"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Export to C3D
+              </button>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-6">
           <nav className="flex gap-6">

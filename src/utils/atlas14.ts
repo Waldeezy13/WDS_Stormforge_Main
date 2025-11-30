@@ -3,7 +3,7 @@
 
 import { InterpolationMethod, getIntensityInPerHr as getIdfIntensity } from './idf';
 
-export type ReturnPeriod = '2yr' | '5yr' | '10yr' | '25yr' | '50yr' | '100yr';
+export type ReturnPeriod = '1yr' | '2yr' | '5yr' | '10yr' | '25yr' | '50yr' | '100yr' | '500yr';
 export type { InterpolationMethod } from './idf';
 export type SourceType = 'CUSTOM' | 'ATLAS14';
 export type DataUnits = 'ENGLISH' | 'METRIC';

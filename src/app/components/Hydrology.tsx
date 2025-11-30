@@ -16,7 +16,7 @@ interface HydrologyProps {
   setInterpolationMethod: (method: InterpolationMethod) => void;
 }
 
-const AVAILABLE_EVENTS: ReturnPeriod[] = ['2yr', '5yr', '10yr', '25yr', '50yr', '100yr'];
+const AVAILABLE_EVENTS: ReturnPeriod[] = ['1yr', '2yr', '5yr', '10yr', '25yr', '50yr', '100yr', '500yr'];
 
 export default function Hydrology({ cityId, setCityId, selectedEvents, setSelectedEvents, interpolationMethod, setInterpolationMethod }: HydrologyProps) {
   const [citiesByState, setCitiesByState] = useState<Record<string, City[]>>({});
@@ -217,7 +217,7 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
     } else {
       // Sort events by return period magnitude when adding
       const newEvents = [...selectedEvents, event];
-      const order = { '2yr': 1, '5yr': 2, '10yr': 3, '25yr': 4, '50yr': 5, '100yr': 6 };
+      const order: Record<ReturnPeriod, number> = { '1yr': 0, '2yr': 1, '5yr': 2, '10yr': 3, '25yr': 4, '50yr': 5, '100yr': 6, '500yr': 7 };
       newEvents.sort((a, b) => order[a] - order[b]);
       setSelectedEvents(newEvents);
     }

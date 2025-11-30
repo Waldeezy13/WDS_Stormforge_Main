@@ -821,12 +821,14 @@ export default function PondDesigner({
   const [csvPasteText, setCsvPasteText] = useState('');
   const [tableErrors, setTableErrors] = useState<string[]>([]);
   const [allowableFlows, setAllowableFlows] = useState<Record<ReturnPeriod, number>>({
+    '1yr': 0,
     '2yr': 0,
     '5yr': 0,
     '10yr': 0,
     '25yr': 0,
     '50yr': 0,
     '100yr': 0,
+    '500yr': 0,
   });
 
   // Calculate pond capacity - use stage-storage curve in custom mode
@@ -861,12 +863,14 @@ export default function PondDesigner({
     if (!drainageTotals) return;
     setAllowableFlows(() => {
       const next: Record<ReturnPeriod, number> = {
+        '1yr': 0,
         '2yr': 0,
         '5yr': 0,
         '10yr': 0,
         '25yr': 0,
         '50yr': 0,
         '100yr': 0,
+        '500yr': 0,
       };
       (Object.keys(drainageTotals.existing.flowTotals) as ReturnPeriod[]).forEach((event) => {
         next[event] = drainageTotals.existing.flowTotals[event] ?? 0;

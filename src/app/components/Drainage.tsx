@@ -35,11 +35,13 @@ interface DrainageProps {
 
   onTotalsChange?: (totals: { existing: DrainageTotals; proposed: DrainageTotals }) => void;
 
+  onReturnPeriodsDetected?: (periods: ReturnPeriod[]) => void;
+
 }
 
 
 
-export default function Drainage({ cityId, selectedEvents, onTotalsChange }: DrainageProps) {
+export default function Drainage({ cityId, selectedEvents, onTotalsChange, onReturnPeriodsDetected }: DrainageProps) {
   // --- State ---
   const [importModalType, setImportModalType] = useState<'existing' | 'proposed' | null>(null);
   
@@ -95,13 +97,15 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
 
   const [results, setResults] = useState<DrainageAreaWithResults[]>([]);
 
-
+  // Storage key for calculation results (shared with page.tsx for export)
+  const CALC_RESULTS_KEY = 'wds-stormforge-calc-results';
 
   useEffect(() => {
 
     if (cityId === 0) {
 
       setResults([]);
+      localStorage.removeItem(CALC_RESULTS_KEY);
 
       return;
 
@@ -132,6 +136,17 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
       );
 
       setResults(calculatedResults);
+      
+      // Store calculation results in localStorage for export
+      const calcResultsForStorage: Record<string, { returnPeriod: string; intensity: number; peakFlowCfs: number }[]> = {};
+      for (const result of calculatedResults) {
+        calcResultsForStorage[result.id] = Object.entries(result.results).map(([event, data]) => ({
+          returnPeriod: event,
+          intensity: data.intensity,
+          peakFlowCfs: data.peakFlowCfs,
+        }));
+      }
+      localStorage.setItem(CALC_RESULTS_KEY, JSON.stringify(calcResultsForStorage));
 
     }
 
@@ -466,25 +481,31 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
 
 
 
-                  {selectedEvents.map(event => (
+                  {selectedEvents.map(event => {
+
+                    const eventResult = row.results?.[event];
+
+                    return (
 
                     <React.Fragment key={event}>
 
                        <td className="px-4 py-2 text-center border-l border-border text-gray-500 font-mono text-xs">
 
-                          {row.isIncluded ? row.results[event].intensity.toFixed(2) : '-'}
+                          {row.isIncluded && eventResult ? eventResult.intensity.toFixed(2) : '-'}
 
                        </td>
 
                        <td className="px-4 py-2 text-right font-mono font-medium text-primary">
 
-                          {row.isIncluded ? row.results[event].peakFlowCfs.toFixed(2) : '-'}
+                          {row.isIncluded && eventResult ? eventResult.peakFlowCfs.toFixed(2) : '-'}
 
                        </td>
 
                     </React.Fragment>
 
-                  ))}
+                  );
+
+                  })}
 
 
 
@@ -552,7 +573,7 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
 
                             <td className="px-4 py-3 text-right font-mono text-accent text-lg">
 
-                                {totals.flowTotals[event].toFixed(2)}
+                                {(totals.flowTotals[event] ?? 0).toFixed(2)}
 
                             </td>
 
@@ -581,9 +602,9 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
 
         {selectedEvents.map(event => {
 
-           const exFlow = existingTotals.flowTotals[event];
+           const exFlow = existingTotals.flowTotals[event] ?? 0;
 
-           const propFlow = proposedTotals.flowTotals[event];
+           const propFlow = proposedTotals.flowTotals[event] ?? 0;
 
            const diff = propFlow - exFlow;
 
@@ -649,6 +670,7 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange }: Dra
           currentAreas={areas}
           onImport={handleImportComplete}
           onClose={() => setImportModalType(null)}
+          onReturnPeriodsDetected={onReturnPeriodsDetected}
         />
       )}
 

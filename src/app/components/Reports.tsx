@@ -1,10 +1,17 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { FileText, Printer, FileSpreadsheet } from 'lucide-react';
+import { FileText, Printer, FileSpreadsheet, Download } from 'lucide-react';
 import { ReturnPeriod, City, InterpolationMethod } from '@/utils/atlas14';
 import { ModifiedRationalResult } from '@/utils/rationalMethod';
 import { OutfallStructure, calculateTotalDischarge } from '@/utils/hydraulics';
+import type { DrainageArea } from '@/utils/drainageCalculations';
+import { 
+  exportToStormforgeJson, 
+  downloadStormforgeJson,
+  DrainageCalculationResult,
+  ProjectMetadata 
+} from '@/utils/stormforgeImport';
 
 interface ReportsProps {
   cityId: number;
@@ -28,11 +35,13 @@ interface ReportsProps {
   pondResults: ModifiedRationalResult[];
   pondDims: { length: number; width: number; depth: number };
   pondInvertElevation: number;
+  projectMetadata?: ProjectMetadata | null;
 }
 
 const STORAGE_KEY_STRUCTURES = 'outfallDesigner_structures';
 const STORAGE_KEY_PLATE_SIZE = 'outfallDesigner_plateSize';
 const STORAGE_KEY_TAILWATER = 'outfallDesigner_tailwater';
+const DRAINAGE_AREAS_KEY = 'wds-stormforge-drainage-areas';
 
 export default function Reports({
   selectedCity,
@@ -41,7 +50,8 @@ export default function Reports({
   drainageTotals,
   pondResults,
   pondDims,
-  pondInvertElevation
+  pondInvertElevation,
+  projectMetadata
 }: ReportsProps) {
   const [outfallStructures, setOutfallStructures] = useState<OutfallStructure[]>([]);
   const [plateSize, setPlateSize] = useState({ width: 4, height: 6 });
@@ -50,6 +60,23 @@ export default function Reports({
   const [projectNumber, setProjectNumber] = useState('');
   const [engineerName, setEngineerName] = useState('');
   const [date, setDate] = useState(new Date().toLocaleDateString());
+  const [drainageAreas, setDrainageAreas] = useState<DrainageArea[]>([]);
+
+  // Load drainage areas from localStorage
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stored = localStorage.getItem(DRAINAGE_AREAS_KEY);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setDrainageAreas(parsed);
+        }
+      } catch (e) {
+        console.error('Failed to parse stored drainage areas:', e);
+      }
+    }
+  }, []);
 
   // Load outfall data from localStorage
   useEffect(() => {
@@ -264,6 +291,67 @@ export default function Reports({
     downloadCSV(arrayToCSV(allData), `${baseFilename}.csv`);
   };
 
+  // Export to Stormforge JSON (for C3D re-import)
+  const handleExportToC3D = useCallback(() => {
+    if (drainageAreas.length === 0) {
+      alert('No drainage areas to export. Please import or create drainage areas first.');
+      return;
+    }
+
+    // Build calculation results map from drainageTotals
+    const calculationResults = new Map<string, DrainageCalculationResult[]>();
+    
+    if (drainageTotals) {
+      drainageAreas.forEach(area => {
+        const results: DrainageCalculationResult[] = [];
+        const flowTotals = area.type === 'existing' 
+          ? drainageTotals.existing.flowTotals 
+          : drainageTotals.proposed.flowTotals;
+        
+        selectedEvents.forEach(event => {
+          // Calculate intensity from Q = CiA => i = Q / (C * A)
+          const totalFlow = flowTotals[event] || 0;
+          const totalArea = area.type === 'existing' 
+            ? drainageTotals.existing.totalArea 
+            : drainageTotals.proposed.totalArea;
+          const weightedC = area.type === 'existing'
+            ? drainageTotals.existing.weightedC
+            : drainageTotals.proposed.weightedC;
+          
+          // Estimate per-area flow proportionally
+          const areaFraction = totalArea > 0 ? area.areaAcres / totalArea : 0;
+          const peakFlowCfs = totalFlow * areaFraction;
+          const intensity = (area.cFactor > 0 && area.areaAcres > 0) 
+            ? peakFlowCfs / (area.cFactor * area.areaAcres) 
+            : 0;
+          
+          results.push({
+            areaId: area.id,
+            returnPeriod: event,
+            intensity,
+            peakFlowCfs,
+          });
+        });
+        
+        calculationResults.set(area.id, results);
+      });
+    }
+
+    // Export to Stormforge JSON
+    const exportData = exportToStormforgeJson(
+      drainageAreas,
+      calculationResults,
+      projectMetadata || undefined
+    );
+
+    // Download the file
+    const filename = projectMetadata?.drawingName 
+      ? `${projectMetadata.drawingName.replace('.dwg', '')}_stormforge_export.json`
+      : 'stormforge_export.json';
+    
+    downloadStormforgeJson(exportData, filename);
+  }, [drainageAreas, drainageTotals, selectedEvents, projectMetadata]);
+
   return (
     <div className="p-8 max-w-5xl mx-auto">
       {/* Controls - Hidden when printing */}
@@ -276,6 +364,15 @@ export default function Reports({
           </div>
         </div>
         <div className="flex gap-3">
+          <button
+            onClick={handleExportToC3D}
+            aria-label="Export to C3D JSON"
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
+            title="Export drainage data for Civil 3D re-import"
+          >
+            <Download className="w-4 h-4" />
+            Export to C3D
+          </button>
           <button
             onClick={handleExportExcel}
             aria-label="Export CSV"

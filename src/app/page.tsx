@@ -1,17 +1,25 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import Header, { Tab } from './components/Header';
 import PondDesigner from './components/PondDesigner';
 import Hydrology from './components/Hydrology';
 import Drainage from './components/Drainage';
 import OutfallDesigner from './components/OutfallDesigner';
 import Reports from './components/Reports';
+import ProjectImport from './components/ProjectImport';
 import { ReturnPeriod, getCitiesByState, City, InterpolationMethod } from '@/utils/atlas14';
 import { SiteParams, ModifiedRationalMethod, ModifiedRationalResult } from '@/utils/rationalMethod';
 import { StageStorageCurve } from '@/utils/stageStorage';
+import { ProjectMetadata, exportToStormforgeJson, downloadStormforgeJson, DrainageCalculationResult } from '@/utils/stormforgeImport';
+import type { DrainageArea } from '@/utils/drainageCalculations';
 
 export type PondMode = 'generic' | 'custom';
+
+// Storage key for drainage areas (shared with Drainage component)
+const DRAINAGE_AREAS_KEY = 'wds-stormforge-drainage-areas';
+const CALC_RESULTS_KEY = 'wds-stormforge-calc-results';
+const PROJECT_META_KEY = 'wds-stormforge-project-meta';
 
 export default function Home() {
   // Global State
@@ -34,6 +42,24 @@ export default function Home() {
       flowTotals: Record<ReturnPeriod, number>;
     };
   } | null>(null);
+  
+  // Project metadata for C3D round-trip
+  const [projectMetadata, setProjectMetadata] = useState<ProjectMetadata | null>(null);
+  
+  // Project import modal state
+  const [showProjectImport, setShowProjectImport] = useState(false);
+
+  // Load project metadata from localStorage after mount (avoids hydration mismatch)
+  useEffect(() => {
+    const stored = localStorage.getItem(PROJECT_META_KEY);
+    if (stored) {
+      try {
+        setProjectMetadata(JSON.parse(stored) as ProjectMetadata);
+      } catch {
+        // Invalid JSON, ignore
+      }
+    }
+  }, []);
 
   // Load cities and set default city (only once on mount)
   useEffect(() => {
@@ -52,6 +78,73 @@ export default function Home() {
     loadDefaultCity();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run once on mount
+
+  // Persist project metadata
+  useEffect(() => {
+    if (projectMetadata) {
+      localStorage.setItem(PROJECT_META_KEY, JSON.stringify(projectMetadata));
+    } else {
+      localStorage.removeItem(PROJECT_META_KEY);
+    }
+  }, [projectMetadata]);
+
+  // Handle project import from C3D
+  const handleProjectImport = useCallback((
+    areas: DrainageArea[],
+    returnPeriods: ReturnPeriod[],
+    projectMeta: ProjectMetadata
+  ) => {
+    // Save drainage areas to localStorage (Drainage component will pick them up)
+    localStorage.setItem(DRAINAGE_AREAS_KEY, JSON.stringify(areas));
+    
+    // Update selected events
+    setSelectedEvents(returnPeriods);
+    
+    // Save project metadata
+    setProjectMetadata(projectMeta);
+    
+    // Navigate to drainage tab to show imported data
+    setActiveTab('drainage');
+    
+    // Force a page refresh to reload drainage areas
+    // This is needed because Drainage component loads from localStorage on mount
+    window.location.reload();
+  }, []);
+
+  // Handle export to C3D
+  const handleExportToC3D = useCallback(() => {
+    const stored = localStorage.getItem(DRAINAGE_AREAS_KEY);
+    if (!stored) {
+      alert('No drainage areas to export. Please add or import drainage areas first.');
+      return;
+    }
+
+    try {
+      const areas = JSON.parse(stored) as DrainageArea[];
+      
+      // Read stored calculation results
+      const storedCalcResults = localStorage.getItem(CALC_RESULTS_KEY);
+      const calculationResults = new Map<string, DrainageCalculationResult[]>();
+      
+      if (storedCalcResults) {
+        const parsed = JSON.parse(storedCalcResults) as Record<string, { returnPeriod: string; intensity: number; peakFlowCfs: number }[]>;
+        for (const [areaId, results] of Object.entries(parsed)) {
+          calculationResults.set(areaId, results.map(r => ({
+            areaId,
+            returnPeriod: r.returnPeriod as ReturnPeriod,
+            intensity: r.intensity,
+            peakFlowCfs: r.peakFlowCfs,
+          })));
+        }
+      }
+
+      const exportData = exportToStormforgeJson(areas, calculationResults, projectMetadata || undefined);
+      downloadStormforgeJson(exportData, `Stormforge_Export_${new Date().toISOString().split('T')[0]}.json`);
+    } catch (error) {
+      console.error('Export error:', error);
+      alert('Failed to export drainage areas');
+    }
+  }, [projectMetadata]);
 
   // Shared State for Outfall & Pond Designer (based on Drainage totals when available)
   // Fall back to reasonable defaults if drainage has not been configured yet
@@ -147,7 +240,21 @@ export default function Home() {
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
-      <Header activeTab={activeTab} onTabChange={setActiveTab} />
+      <Header 
+        activeTab={activeTab} 
+        onTabChange={setActiveTab} 
+        onProjectImport={() => setShowProjectImport(true)}
+        onExportToC3D={handleExportToC3D}
+      />
+
+      {/* Project Import Modal */}
+      {showProjectImport && (
+        <ProjectImport
+          onImport={handleProjectImport}
+          onClose={() => setShowProjectImport(false)}
+          currentReturnPeriods={selectedEvents}
+        />
+      )}
 
       <div className="w-full border-b border-border bg-slate-900/80 sticky top-16 z-40">
         <div className="container mx-auto px-6 py-2 flex flex-wrap items-center justify-between gap-2 text-xs sm:text-sm text-gray-200">
@@ -156,6 +263,11 @@ export default function Home() {
             <span className="font-semibold">
               {selectedCity ? `${selectedCity.name}, ${selectedCity.state}` : 'Select a city in the Hydrology tab'}
             </span>
+            {projectMetadata?.drawingName && (
+              <span className="ml-4 text-gray-400">
+                Project: <span className="text-primary">{projectMetadata.drawingName}</span>
+              </span>
+            )}
           </div>
           <div className="text-gray-400">
             Source:{' '}
@@ -185,6 +297,7 @@ export default function Home() {
             cityId={cityId} 
             selectedEvents={selectedEvents} 
             onTotalsChange={setDrainageTotals}
+            onReturnPeriodsDetected={setSelectedEvents}
           />
         )}
 
@@ -230,6 +343,7 @@ export default function Home() {
               pondResults={pondResults}
               pondDims={pondDims}
               pondInvertElevation={pondInvertElevation}
+              projectMetadata={projectMetadata}
             />
           </div>
         )}

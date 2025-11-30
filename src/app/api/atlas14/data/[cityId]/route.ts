@@ -52,7 +52,7 @@ export async function GET(
     
     // Also include standard durations even if no data exists (for consistency)
     const standardDurations = [5, 10, 15, 30, 60, 120, 180, 360, 720, 1440];
-    const standardReturnPeriods: ReturnPeriod[] = ['2yr', '5yr', '10yr', '25yr', '50yr', '100yr'];
+    const standardReturnPeriods: ReturnPeriod[] = ['1yr', '2yr', '5yr', '10yr', '25yr', '50yr', '100yr', '500yr'];
     
     // Combine all durations (database durations + standard durations), removing duplicates
     const uniqueDurations = Array.from(new Set([...allDurations, ...standardDurations])).sort((a, b) => a - b);

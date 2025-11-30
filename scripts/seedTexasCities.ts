@@ -141,7 +141,7 @@ const TEXAS_CITIES: Array<{ name: string; lat: number; lon: number }> = [
 const NOAA_PFDS_BASE_URL = 'https://hdsc.nws.noaa.gov/cgi-bin/new/cgi_readH5.py';
 
 // Standard return periods we support
-const SUPPORTED_RETURN_PERIODS = ['2yr', '5yr', '10yr', '25yr', '50yr', '100yr'];
+const SUPPORTED_RETURN_PERIODS = ['1yr', '2yr', '5yr', '10yr', '25yr', '50yr', '100yr', '500yr'];
 
 // PDS return period indices (0-indexed) in NOAA response quantiles array
 // Columns are: 1yr, 2yr, 5yr, 10yr, 25yr, 50yr, 100yr, 200yr, 500yr, 1000yr

@@ -156,7 +156,7 @@ export async function POST(request: Request) {
 
           const sampleRows = results.data.slice(0, 3);
           // Standard return periods supported by this app
-          const supportedReturnPeriods = ['2yr', '5yr', '10yr', '25yr', '50yr', '100yr'];
+          const supportedReturnPeriods = ['1yr', '2yr', '5yr', '10yr', '25yr', '50yr', '100yr', '500yr'];
 
           const parsedData: ParsedRainfallData[] = [];
           const errors: string[] = [];

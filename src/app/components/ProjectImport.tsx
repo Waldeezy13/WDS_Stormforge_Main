@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useMemo } from 'react';
 import {
   Upload,
   X,
@@ -12,32 +12,35 @@ import {
   ChevronRight,
   Info,
   Layers,
+  CloudRain,
+  FolderOpen,
 } from 'lucide-react';
 import type { DrainageArea } from '@/utils/drainageCalculations';
+import type { ReturnPeriod } from '@/utils/atlas14';
 import {
   StormforgeExportRoot,
   DrainageAreaExportDto,
   parseStormforgeFile,
   mapDtoToDrainageArea,
-  mergeImportedAreas,
+  extractReturnPeriods,
   updateImportMetadata,
   DrainageImportInfo,
   ImportValidationResult,
-  MergeResult,
-  extractReturnPeriods,
+  ProjectMetadata,
 } from '@/utils/stormforgeImport';
-import type { ReturnPeriod } from '@/utils/atlas14';
 
 // ============================================================================
 // Types
 // ============================================================================
 
-interface DrainageImportProps {
-  targetType: 'existing' | 'proposed';
-  currentAreas: DrainageArea[];
-  onImport: (areas: DrainageArea[]) => void;
+interface ProjectImportProps {
+  onImport: (
+    areas: DrainageArea[],
+    returnPeriods: ReturnPeriod[],
+    projectMeta: ProjectMetadata
+  ) => void;
   onClose: () => void;
-  onReturnPeriodsDetected?: (periods: ReturnPeriod[]) => void;
+  currentReturnPeriods: ReturnPeriod[];
 }
 
 interface PreviewRow {
@@ -47,17 +50,17 @@ interface PreviewRow {
   warnings: string[];
 }
 
+const AVAILABLE_RETURN_PERIODS: ReturnPeriod[] = ['1yr', '2yr', '5yr', '10yr', '25yr', '50yr', '100yr', '500yr'];
+
 // ============================================================================
 // Component
 // ============================================================================
 
-export default function DrainageImport({
-  targetType,
-  currentAreas,
+export default function ProjectImport({
   onImport,
   onClose,
-  onReturnPeriodsDetected,
-}: DrainageImportProps) {
+  currentReturnPeriods,
+}: ProjectImportProps) {
   // State
   const [file, setFile] = useState<File | null>(null);
   const [exportData, setExportData] = useState<StormforgeExportRoot | null>(null);
@@ -65,8 +68,10 @@ export default function DrainageImport({
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
-  const [mergePreview, setMergePreview] = useState<{ existing: MergeResult; proposed: MergeResult } | null>(null);
+  
+  // Return period selection
   const [detectedPeriods, setDetectedPeriods] = useState<ReturnPeriod[]>([]);
+  const [selectedPeriods, setSelectedPeriods] = useState<ReturnPeriod[]>(currentReturnPeriods);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -84,34 +89,19 @@ export default function DrainageImport({
     setPreviewRows(prev => prev.map(row => ({ ...row, selectedType: type })));
   }, []);
 
-  // Recalculate merge preview when row types change
-  const calculateMergePreview = useCallback((rows: PreviewRow[], sourceFile: string, sourceDrawing?: string) => {
-    // Separate by type
-    const existingDtos = rows.filter(r => r.selectedType === 'existing').map(r => r.dto);
-    const proposedDtos = rows.filter(r => r.selectedType === 'proposed').map(r => r.dto);
-
-    // Map to DrainageAreas
-    const existingAreas = existingDtos.map((dto, i) => 
-      mapDtoToDrainageArea(dto, 'existing', i, sourceFile, sourceDrawing)
-    );
-    const proposedAreas = proposedDtos.map((dto, i) => 
-      mapDtoToDrainageArea(dto, 'proposed', i, sourceFile, sourceDrawing)
-    );
-
-    // Calculate merge results for both types
-    const existingMerge = mergeImportedAreas(currentAreas, existingAreas, 'existing');
-    const proposedMerge = mergeImportedAreas(existingMerge.areas, proposedAreas, 'proposed');
-
-    return { existing: existingMerge, proposed: proposedMerge };
-  }, [currentAreas]);
-
-  // Update merge preview when rows change
-  React.useEffect(() => {
-    if (previewRows.length > 0 && file && exportData) {
-      const preview = calculateMergePreview(previewRows, file.name, exportData.drawingName);
-      setMergePreview(preview);
-    }
-  }, [previewRows, file, exportData, calculateMergePreview]);
+  // Toggle return period selection
+  const toggleReturnPeriod = useCallback((period: ReturnPeriod) => {
+    setSelectedPeriods(prev => {
+      if (prev.includes(period)) {
+        return prev.filter(p => p !== period);
+      }
+      return [...prev, period].sort((a, b) => {
+        const aNum = parseInt(a);
+        const bNum = parseInt(b);
+        return aNum - bNum;
+      });
+    });
+  }, []);
 
   // File selection handler
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -129,11 +119,16 @@ export default function DrainageImport({
       if (result.success && result.data) {
         setExportData(result.data);
 
-        // Extract return periods from C3D export
+        // Extract return periods from C3D data
         const { detected } = extractReturnPeriods(result.data);
         setDetectedPeriods(detected);
+        
+        // Auto-select detected periods if available, otherwise keep current
+        if (detected.length > 0) {
+          setSelectedPeriods(detected);
+        }
 
-        // Build preview rows with per-row warnings and default type
+        // Build preview rows - default all to 'proposed' for new projects
         const rows: PreviewRow[] = result.data.drainageAreas.map((dto) => {
           const rowWarnings: string[] = [];
           
@@ -149,19 +144,16 @@ export default function DrainageImport({
 
           return {
             dto,
-            selectedType: targetType, // Default to the target type from button click
+            selectedType: 'proposed', // Default to proposed for new project setup
             hasWarnings: rowWarnings.length > 0,
             warnings: rowWarnings,
           };
         });
 
         setPreviewRows(rows);
-        // Merge preview will be calculated by the effect
       } else {
         setExportData(null);
         setPreviewRows([]);
-        setMergePreview(null);
-        setDetectedPeriods([]);
       }
     } catch (err) {
       console.error('Import error:', err);
@@ -173,7 +165,7 @@ export default function DrainageImport({
     } finally {
       setIsLoading(false);
     }
-  }, [targetType]);
+  }, []);
 
   // Toggle row expansion
   const toggleRow = (index: number) => {
@@ -188,70 +180,83 @@ export default function DrainageImport({
     });
   };
 
+  // Calculate summary stats
+  const summary = useMemo(() => {
+    const existingRows = previewRows.filter(r => r.selectedType === 'existing');
+    const proposedRows = previewRows.filter(r => r.selectedType === 'proposed');
+    return {
+      existingCount: existingRows.length,
+      proposedCount: proposedRows.length,
+      existingArea: existingRows.reduce((sum, r) => sum + r.dto.areaAC, 0),
+      proposedArea: proposedRows.reduce((sum, r) => sum + r.dto.areaAC, 0),
+      totalArea: previewRows.reduce((sum, r) => sum + r.dto.areaAC, 0),
+    };
+  }, [previewRows]);
+
   // Confirm import
   const handleConfirmImport = useCallback(() => {
-    if (!mergePreview || !exportData || !file) return;
+    if (!exportData || !file || selectedPeriods.length === 0) return;
 
-    // Use the final merged areas (proposed merge contains all)
-    onImport(mergePreview.proposed.areas);
+    // Map all rows to DrainageAreas with their selected types
+    const areas: DrainageArea[] = previewRows.map((row, i) => 
+      mapDtoToDrainageArea(row.dto, row.selectedType, i, file.name, exportData.drawingName)
+    );
 
-    // Update return periods if any were detected
-    if (detectedPeriods.length > 0 && onReturnPeriodsDetected) {
-      onReturnPeriodsDetected(detectedPeriods);
-    }
+    // Build project metadata
+    const projectMeta: ProjectMetadata = {
+      drawingName: exportData.drawingName,
+      drawingPath: exportData.drawingPath,
+      schemaVersion: exportData.schemaVersion,
+      originalExportDate: exportData.exportedAtUtc,
+    };
 
-    // Save import metadata for each type that had areas
+    // Save import metadata for each type
     const existingCount = previewRows.filter(r => r.selectedType === 'existing').length;
     const proposedCount = previewRows.filter(r => r.selectedType === 'proposed').length;
     
     if (existingCount > 0) {
-      const existingTotalArea = previewRows
-        .filter(r => r.selectedType === 'existing')
-        .reduce((sum, r) => sum + r.dto.areaAC, 0);
       const existingInfo: DrainageImportInfo = {
         sourceFile: file.name,
         importedAt: new Date().toISOString(),
         itemCount: existingCount,
         sourceDrawing: exportData.drawingName || undefined,
-        totalAreaAc: existingTotalArea,
+        totalAreaAc: summary.existingArea,
         schemaVersion: exportData.schemaVersion,
       };
       updateImportMetadata('existing', existingInfo);
     }
 
     if (proposedCount > 0) {
-      const proposedTotalArea = previewRows
-        .filter(r => r.selectedType === 'proposed')
-        .reduce((sum, r) => sum + r.dto.areaAC, 0);
       const proposedInfo: DrainageImportInfo = {
         sourceFile: file.name,
         importedAt: new Date().toISOString(),
         itemCount: proposedCount,
         sourceDrawing: exportData.drawingName || undefined,
-        totalAreaAc: proposedTotalArea,
+        totalAreaAc: summary.proposedArea,
         schemaVersion: exportData.schemaVersion,
       };
       updateImportMetadata('proposed', proposedInfo);
     }
 
+    onImport(areas, selectedPeriods, projectMeta);
     onClose();
-  }, [mergePreview, exportData, file, previewRows, onImport, onClose, detectedPeriods, onReturnPeriodsDetected]);
+  }, [exportData, file, previewRows, selectedPeriods, summary, onImport, onClose]);
 
   // Render
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-      <div className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+      <div className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="px-6 py-4 border-b border-border bg-slate-900/50 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-primary/10 rounded-lg">
-              <FileJson className="w-5 h-5 text-primary" />
+              <FolderOpen className="w-5 h-5 text-primary" />
             </div>
             <div>
               <h2 className="text-lg font-semibold text-white">
-                Import {targetType === 'existing' ? 'Existing' : 'Proposed'} Drainage Areas
+                New Project from Civil 3D
               </h2>
-              <p className="text-sm text-gray-400">From Civil 3D Stormforge Export</p>
+              <p className="text-sm text-gray-400">Import drainage areas and configure storm events</p>
             </div>
           </div>
           <button
@@ -278,8 +283,8 @@ export default function DrainageImport({
                 title="Select Stormforge JSON file"
                 aria-label="Select Stormforge JSON file"
               />
-              <Upload className="w-12 h-12 text-gray-500 mx-auto mb-4" />
-              <p className="text-gray-300 mb-2">Select a Stormforge JSON export file</p>
+              <FolderOpen className="w-12 h-12 text-gray-500 mx-auto mb-4" />
+              <p className="text-gray-300 mb-2">Select a Stormforge JSON export file to start a new project</p>
               <p className="text-sm text-gray-500 mb-4">
                 Export from Civil 3D using the Stormforge plugin
               </p>
@@ -327,11 +332,11 @@ export default function DrainageImport({
 
           {/* Preview */}
           {validation?.isValid && exportData && (
-            <div className="space-y-4">
+            <div className="space-y-6">
               {/* Source Info */}
               <div className="bg-slate-900/50 border border-border rounded-lg p-4">
                 <div className="flex items-center gap-2 text-sm text-gray-400 mb-2">
-                  <Info className="w-4 h-4" />
+                  <FileJson className="w-4 h-4" />
                   <span>Source Information</span>
                 </div>
                 <div className="grid grid-cols-2 gap-4 text-sm">
@@ -354,20 +359,45 @@ export default function DrainageImport({
                     <span className="text-white">v{exportData.schemaVersion}</span>
                   </div>
                 </div>
-                {detectedPeriods.length > 0 && (
-                  <div className="mt-3 pt-3 border-t border-border">
-                    <div className="flex items-center gap-2">
-                      <span className="text-gray-500 text-sm">Return Periods:</span>
-                      <div className="flex flex-wrap gap-1">
-                        {detectedPeriods.map(period => (
-                          <span key={period} className="px-2 py-0.5 bg-amber-500/20 border border-amber-500/50 text-amber-400 text-xs rounded font-medium">
-                            {period}
-                          </span>
-                        ))}
-                      </div>
-                      <span className="text-xs text-gray-400 ml-2">(will replace current selection)</span>
-                    </div>
-                  </div>
+              </div>
+
+              {/* Return Period Selection */}
+              <div className="bg-slate-900/50 border border-border rounded-lg p-4">
+                <div className="flex items-center gap-2 text-sm text-gray-400 mb-3">
+                  <CloudRain className="w-4 h-4" />
+                  <span>Storm Events</span>
+                  {detectedPeriods.length > 0 && (
+                    <span className="ml-2 px-2 py-0.5 bg-green-500/10 border border-green-500/30 rounded text-xs text-green-400">
+                      Auto-detected from C3D
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {AVAILABLE_RETURN_PERIODS.map(period => {
+                    const isSelected = selectedPeriods.includes(period);
+                    const isDetected = detectedPeriods.includes(period);
+                    return (
+                      <button
+                        key={period}
+                        onClick={() => toggleReturnPeriod(period)}
+                        className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                          isSelected
+                            ? 'bg-primary text-white'
+                            : 'bg-slate-800 text-gray-400 hover:bg-slate-700'
+                        } ${isDetected && !isSelected ? 'ring-1 ring-green-500/50' : ''}`}
+                        title={isDetected ? 'Detected in C3D export' : undefined}
+                      >
+                        {period}
+                        {isDetected && <span className="ml-1 text-xs opacity-70">•</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+                {selectedPeriods.length === 0 && (
+                  <p className="text-sm text-yellow-400 mt-2">
+                    <AlertTriangle className="w-4 h-4 inline mr-1" />
+                    Select at least one storm event
+                  </p>
                 )}
               </div>
 
@@ -389,32 +419,24 @@ export default function DrainageImport({
                 </div>
               )}
 
-              {/* Merge Preview */}
-              {mergePreview && (
-                <div className="flex gap-4 text-sm flex-wrap">
-                  <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-500/10 border border-gray-500/30 rounded-lg text-gray-300">
-                    <Layers className="w-4 h-4" />
-                    <span>{previewRows.filter(r => r.selectedType === 'existing').length} existing</span>
-                  </div>
-                  <div className="flex items-center gap-2 px-3 py-1.5 bg-primary/10 border border-primary/30 rounded-lg text-primary">
-                    <Layers className="w-4 h-4" />
-                    <span>{previewRows.filter(r => r.selectedType === 'proposed').length} proposed</span>
-                  </div>
-                  <div className="flex items-center gap-2 px-3 py-1.5 bg-green-500/10 border border-green-500/30 rounded-lg text-green-400">
-                    <CheckCircle className="w-4 h-4" />
-                    <span>{mergePreview.existing.added + mergePreview.proposed.added} new</span>
-                  </div>
-                  {(mergePreview.existing.updated + mergePreview.proposed.updated) > 0 && (
-                    <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 border border-blue-500/30 rounded-lg text-blue-400">
-                      <Info className="w-4 h-4" />
-                      <span>{mergePreview.existing.updated + mergePreview.proposed.updated} updated</span>
-                    </div>
-                  )}
+              {/* Summary Cards */}
+              <div className="grid grid-cols-3 gap-4">
+                <div className="bg-slate-900/50 border border-border rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold text-white">{previewRows.length}</div>
+                  <div className="text-xs text-gray-400 uppercase">Total Areas</div>
                 </div>
-              )}
+                <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold text-gray-300">{summary.existingCount}</div>
+                  <div className="text-xs text-gray-400 uppercase">Existing ({summary.existingArea.toFixed(1)} ac)</div>
+                </div>
+                <div className="bg-primary/10 border border-primary/30 rounded-lg p-4 text-center">
+                  <div className="text-2xl font-bold text-primary">{summary.proposedCount}</div>
+                  <div className="text-xs text-gray-400 uppercase">Proposed ({summary.proposedArea.toFixed(1)} ac)</div>
+                </div>
+              </div>
 
               {/* Bulk Type Selection */}
-              <div className="flex items-center gap-3 py-2">
+              <div className="flex items-center gap-3">
                 <span className="text-sm text-gray-400">Set all as:</span>
                 <button
                   onClick={() => setAllRowsType('existing')}
@@ -465,7 +487,7 @@ export default function DrainageImport({
                               value={row.selectedType}
                               onChange={(e) => updateRowType(i, e.target.value as 'existing' | 'proposed')}
                               onClick={(e) => e.stopPropagation()}
-                              className={`px-2 py-1 rounded text-xs font-medium cursor-pointer transition-colors [&_option]:bg-slate-800 [&_option]:text-white ${
+                              className={`px-2 py-1 rounded text-xs font-medium cursor-pointer transition-colors ${
                                 row.selectedType === 'existing' 
                                   ? 'bg-gray-700 text-gray-200 border border-gray-600' 
                                   : 'bg-primary/20 text-primary border border-primary/50'
@@ -473,8 +495,8 @@ export default function DrainageImport({
                               title="Select drainage area type"
                               aria-label="Select drainage area type"
                             >
-                              <option value="existing" className="bg-slate-800 text-white">Existing</option>
-                              <option value="proposed" className="bg-slate-800 text-white">Proposed</option>
+                              <option value="existing">Existing</option>
+                              <option value="proposed">Proposed</option>
                             </select>
                           </td>
                           <td className="px-3 py-2 text-right font-mono">{row.dto.areaAC.toFixed(2)}</td>
@@ -527,6 +549,12 @@ export default function DrainageImport({
                                   <span className="text-gray-500">DA ID:</span>{' '}
                                   <span className="text-gray-300">{row.dto.daId || '-'}</span>
                                 </div>
+                                {row.dto.returnPeriods && row.dto.returnPeriods.length > 0 && (
+                                  <div>
+                                    <span className="text-gray-500">Return Periods:</span>{' '}
+                                    <span className="text-gray-300">{row.dto.returnPeriods.join(', ')} yr</span>
+                                  </div>
+                                )}
                                 {row.dto.notes && (
                                   <div className="col-span-3">
                                     <span className="text-gray-500">Notes:</span>{' '}
@@ -548,17 +576,6 @@ export default function DrainageImport({
                   </tbody>
                 </table>
               </div>
-
-              {/* Summary */}
-              <div className="text-sm text-gray-400">
-                Total: {previewRows.length} areas,{' '}
-                {previewRows.reduce((sum, r) => sum + r.dto.areaAC, 0).toFixed(2)} acres
-                {' • '}
-                <span className="text-gray-500">
-                  {previewRows.filter(r => r.selectedType === 'existing').length} existing, 
-                  {' '}{previewRows.filter(r => r.selectedType === 'proposed').length} proposed
-                </span>
-              </div>
             </div>
           )}
         </div>
@@ -574,10 +591,11 @@ export default function DrainageImport({
           {validation?.isValid && (
             <button
               onClick={handleConfirmImport}
-              className="px-6 py-2 bg-primary hover:bg-primary/90 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
+              disabled={selectedPeriods.length === 0}
+              className="px-6 py-2 bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center gap-2"
             >
               <CheckCircle className="w-4 h-4" />
-              Import {previewRows.length} Areas
+              Start Project ({previewRows.length} Areas)
             </button>
           )}
         </div>

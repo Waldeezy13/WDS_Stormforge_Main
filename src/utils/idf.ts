@@ -259,15 +259,17 @@ export function convertToAtlas14Table(
   rainfallData: RainfallData[]
 ): Record<ReturnPeriod, Array<{ durationMinutes: number; depthInches: number }>> {
   const table: Record<ReturnPeriod, Array<{ durationMinutes: number; depthInches: number }>> = {
+    '1yr': [],
     '2yr': [],
     '5yr': [],
     '10yr': [],
     '25yr': [],
     '50yr': [],
     '100yr': [],
+    '500yr': [],
   };
 
-  const returnPeriods: ReturnPeriod[] = ['2yr', '5yr', '10yr', '25yr', '50yr', '100yr'];
+  const returnPeriods: ReturnPeriod[] = ['1yr', '2yr', '5yr', '10yr', '25yr', '50yr', '100yr', '500yr'];
 
   for (const data of rainfallData) {
     for (const rp of returnPeriods) {

@@ -45,7 +45,7 @@ export async function POST(request: Request) {
             VALUES (?, ?, ?, ?)
           `);
 
-          const validReturnPeriods = ['2yr', '5yr', '10yr', '25yr', '50yr', '100yr'];
+          const validReturnPeriods = ['1yr', '2yr', '5yr', '10yr', '25yr', '50yr', '100yr', '500yr'];
           const processedCities = new Set<string>();
           const errors: string[] = [];
 

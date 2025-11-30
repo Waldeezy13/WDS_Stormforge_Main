@@ -31,8 +31,11 @@ export interface DrainageAreaExportDto {
   // Parcel info (from Civil 3D Parcel API)
   parcelName: string;
   parcelHandle: string;
+  parcelNumber?: number;
+  siteName?: string;
   areaSF: number;
   areaAC: number;
+  perimeter?: number;
 
   // Identity fields (from WD_Drainage property set)
   daId: string;
@@ -44,13 +47,25 @@ export interface DrainageAreaExportDto {
   landUse: string;
   pctImpervious: number | null;
   soilGroup: string;
+  curveNumber?: number | null;
   hydroMethod: string;
   designStormYR: number | null;
   designDurationMin: number | null;
+  
+  // Return periods selected in C3D (e.g., [2, 10, 25, 100])
+  returnPeriods?: number[];
 
   // Design Outputs (from WD_Drainage property set)
   iDesignInPerHr: number | null;
   qDesignCFS: number | null;
+
+  // Per-storm results (for detailed round-trip to C3D)
+  // These are computed by Stormforge and can be used to update C3D property sets
+  stormResults?: {
+    returnPeriod: number;     // e.g., 1, 2, 5, 10, 25, 50, 100, 500
+    intensity: number;        // in/hr
+    peakFlow: number;         // cfs
+  }[];
 
   // Meta (from WD_Drainage property set)
   excludeFromExport: boolean;
@@ -102,9 +117,10 @@ export function validateStormforgeExport(data: unknown): ImportValidationResult 
   const root = data as Partial<StormforgeExportRoot>;
 
   // Check required root fields
+  const COMPATIBLE_VERSIONS = ['1.0', '1.1'];
   if (!root.schemaVersion) {
     warnings.push('Missing schemaVersion - assuming compatible format');
-  } else if (root.schemaVersion !== '1.0') {
+  } else if (!COMPATIBLE_VERSIONS.includes(root.schemaVersion)) {
     warnings.push(`Schema version ${root.schemaVersion} may not be fully compatible`);
   }
 
@@ -186,14 +202,16 @@ export function mapDtoToDrainageArea(
     hydroMethod: dto.hydroMethod || undefined,
     designStormYR: dto.designStormYR ?? undefined,
     notes: dto.notes || undefined,
+    // Preserve full C3D data for round-trip export
+    rawC3DData: dto,
   };
 
   return {
     id,
     type,
     name,
-    areaAcres: dto.areaAC ?? 0,
-    cFactor: dto.runoffC ?? 0,
+    areaAcres: Math.round((dto.areaAC ?? 0) * 100) / 100, // Round to 2 decimal places
+    cFactor: Math.round((dto.runoffC ?? 0) * 100) / 100,  // Round to 2 decimal places
     tcMinutes: dto.tcMin ?? 10,
     isIncluded: !dto.excludeFromExport,
     importSource,
@@ -339,6 +357,198 @@ export function clearImportMetadata(type: 'existing' | 'proposed'): void {
   const current = getImportMetadata();
   current[type] = null;
   localStorage.setItem(IMPORT_METADATA_KEY, JSON.stringify(current));
+}
+
+// ============================================================================
+// Return Period Extraction
+// ============================================================================
+
+import type { ReturnPeriod } from './atlas14';
+
+/**
+ * Maps numeric return periods to ReturnPeriod strings.
+ */
+const RETURN_PERIOD_MAP: Record<number, ReturnPeriod> = {
+  1: '1yr',
+  2: '2yr',
+  5: '5yr',
+  10: '10yr',
+  25: '25yr',
+  50: '50yr',
+  100: '100yr',
+  500: '500yr',
+};
+
+/**
+ * Extracts return periods from C3D export data.
+ * Aggregates all returnPeriods arrays across drainage areas to find common selections.
+ */
+export function extractReturnPeriods(exportData: StormforgeExportRoot): {
+  detected: ReturnPeriod[];
+  allPeriods: number[];
+} {
+  const allPeriods = new Set<number>();
+  
+  for (const area of exportData.drainageAreas) {
+    if (area.returnPeriods && Array.isArray(area.returnPeriods)) {
+      for (const period of area.returnPeriods) {
+        allPeriods.add(period);
+      }
+    }
+    // Also check designStormYR as fallback
+    if (area.designStormYR && typeof area.designStormYR === 'number') {
+      allPeriods.add(area.designStormYR);
+    }
+  }
+
+  const detected: ReturnPeriod[] = [];
+  const sortedPeriods = Array.from(allPeriods).sort((a, b) => a - b);
+  
+  for (const period of sortedPeriods) {
+    const mapped = RETURN_PERIOD_MAP[period];
+    if (mapped) {
+      detected.push(mapped);
+    }
+  }
+
+  return { detected, allPeriods: sortedPeriods };
+}
+
+// ============================================================================
+// Export to Stormforge JSON
+// ============================================================================
+
+export interface DrainageCalculationResult {
+  areaId: string;
+  returnPeriod: ReturnPeriod;
+  intensity: number;
+  peakFlowCfs: number;
+}
+
+export interface ProjectMetadata {
+  drawingName?: string;
+  drawingPath?: string;
+  schemaVersion?: string;
+  originalExportDate?: string;
+}
+
+/**
+ * Exports current drainage areas back to Stormforge JSON format.
+ * Merges original C3D data with updated design outputs.
+ */
+export function exportToStormforgeJson(
+  areas: DrainageArea[],
+  calculationResults: Map<string, DrainageCalculationResult[]>,
+  projectMeta?: ProjectMetadata
+): StormforgeExportRoot {
+  const drainageAreas: DrainageAreaExportDto[] = areas.map(area => {
+    // Start with raw C3D data if available, otherwise build from scratch
+    const rawData = area.importSource?.rawC3DData;
+    
+    // Get calculation results for this area
+    const areaResults = calculationResults.get(area.id) || [];
+    
+    // Find the max intensity and flow from results (typically the controlling storm)
+    let maxIntensity: number | null = null;
+    let maxFlow: number | null = null;
+    
+    // Build per-storm results array
+    const stormResults: { returnPeriod: number; intensity: number; peakFlow: number }[] = [];
+    
+    for (const result of areaResults) {
+      // Parse return period number from string like "2yr", "100yr"
+      const periodMatch = result.returnPeriod.match(/^(\d+)yr$/);
+      const periodNum = periodMatch ? parseInt(periodMatch[1], 10) : 0;
+      
+      if (periodNum > 0) {
+        stormResults.push({
+          returnPeriod: periodNum,
+          intensity: Math.round(result.intensity * 100) / 100,  // Round to 2 decimals
+          peakFlow: Math.round(result.peakFlowCfs * 100) / 100, // Round to 2 decimals
+        });
+      }
+      
+      if (maxIntensity === null || result.intensity > maxIntensity) {
+        maxIntensity = result.intensity;
+      }
+      if (maxFlow === null || result.peakFlowCfs > maxFlow) {
+        maxFlow = result.peakFlowCfs;
+      }
+    }
+    
+    // Sort storm results by return period
+    stormResults.sort((a, b) => a.returnPeriod - b.returnPeriod);
+    
+    // Extract return periods from results
+    const returnPeriods = stormResults.map(r => r.returnPeriod);
+
+    // Build the export DTO
+    const dto: DrainageAreaExportDto = {
+      // Parcel info - preserve from raw or use current
+      parcelName: rawData?.parcelName ?? area.name,
+      parcelHandle: rawData?.parcelHandle ?? area.importSource?.parcelHandle ?? '',
+      parcelNumber: rawData?.parcelNumber,
+      siteName: rawData?.siteName,
+      areaSF: area.areaAcres * 43560, // Convert acres to SF
+      areaAC: area.areaAcres,
+      perimeter: rawData?.perimeter,
+      
+      // Identity fields
+      daId: rawData?.daId ?? area.importSource?.daId ?? area.id,
+      targetNodeId: rawData?.targetNodeId ?? area.importSource?.targetNodeId ?? '',
+      
+      // Design Inputs - use current values where appropriate
+      runoffC: area.cFactor,
+      tcMin: area.tcMinutes,
+      landUse: rawData?.landUse ?? area.importSource?.landUse ?? '',
+      pctImpervious: rawData?.pctImpervious ?? area.importSource?.pctImpervious ?? null,
+      soilGroup: rawData?.soilGroup ?? area.importSource?.soilGroup ?? '',
+      curveNumber: rawData?.curveNumber,
+      hydroMethod: rawData?.hydroMethod ?? area.importSource?.hydroMethod ?? 'Rational_Method',
+      designStormYR: rawData?.designStormYR ?? area.importSource?.designStormYR ?? null,
+      designDurationMin: rawData?.designDurationMin ?? null,
+      returnPeriods: returnPeriods.length > 0 ? returnPeriods : (rawData?.returnPeriods ?? []),
+      
+      // Design Outputs - updated from calculations
+      iDesignInPerHr: maxIntensity !== null ? Math.round(maxIntensity * 100) / 100 : null,
+      qDesignCFS: maxFlow !== null ? Math.round(maxFlow * 100) / 100 : null,
+      
+      // Per-storm results for detailed C3D import
+      stormResults: stormResults.length > 0 ? stormResults : undefined,
+      
+      // Meta
+      excludeFromExport: !area.isIncluded,
+      notes: rawData?.notes ?? area.importSource?.notes ?? '',
+    };
+
+    return dto;
+  });
+
+  return {
+    schemaVersion: projectMeta?.schemaVersion ?? '1.1',  // Bump version for new stormResults field
+    drawingName: projectMeta?.drawingName ?? 'Stormforge_Export.json',
+    drawingPath: projectMeta?.drawingPath ?? '',
+    exportedAtUtc: new Date().toISOString(),
+    drainageAreas,
+  };
+}
+
+/**
+ * Downloads a Stormforge export as a JSON file.
+ */
+export function downloadStormforgeJson(exportData: StormforgeExportRoot, filename?: string): void {
+  const json = JSON.stringify(exportData, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename ?? `${exportData.drawingName.replace('.dwg', '')}_export.json`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  
+  URL.revokeObjectURL(url);
 }
 
 // ============================================================================
