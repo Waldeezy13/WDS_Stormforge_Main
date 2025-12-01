@@ -6,6 +6,103 @@ import { OutfallStructure, OverlapRegion } from '@/utils/hydraulics';
 // --- Outfall Type ---
 export type OutfallStyle = 'orifice_plate';
 
+// Overhang region interface - exported for use in parent component
+export interface OverhangRegion {
+  id: string;
+  x1: number; // Left edge (ft, relative to center)
+  x2: number; // Right edge (ft, relative to center)
+  y1: number; // Bottom elevation (ft)
+  y2: number; // Top elevation (ft)
+  type: 'left' | 'right' | 'top' | 'bottom'; // Which edge is exceeded
+}
+
+// Helper function to detect overhangs - exported for use in parent component
+export function detectOverhangs(
+  structures: OutfallStructure[],
+  plateSize: { width: number; height: number },
+  pondInvert: number
+): OverhangRegion[] {
+  const plateLeftFt = -plateSize.width / 2;
+  const plateRightFt = plateSize.width / 2;
+  const plateBottomEl = pondInvert;
+  const plateTopEl = pondInvert + plateSize.height;
+
+  const overhangs: OverhangRegion[] = [];
+
+  structures.forEach(s => {
+    const offset = s.horizontalOffsetFt || 0;
+    let leftEdge: number;
+    let rightEdge: number;
+    let bottomEl: number;
+    let topEl: number;
+
+    if (s.type === 'circular') {
+      const dia = s.diameterFt || 0;
+      leftEdge = offset - dia / 2;
+      rightEdge = offset + dia / 2;
+      bottomEl = s.invertElevation;
+      topEl = s.invertElevation + dia;
+    } else {
+      const w = s.widthFt || 0;
+      const h = s.heightFt || 0;
+      leftEdge = offset - w / 2;
+      rightEdge = offset + w / 2;
+      bottomEl = s.invertElevation;
+      topEl = s.invertElevation + h;
+    }
+
+    // Check left overhang
+    if (leftEdge < plateLeftFt) {
+      overhangs.push({
+        id: s.id,
+        x1: leftEdge,
+        x2: Math.min(rightEdge, plateLeftFt),
+        y1: Math.max(bottomEl, plateBottomEl),
+        y2: Math.min(topEl, plateTopEl),
+        type: 'left'
+      });
+    }
+
+    // Check right overhang
+    if (rightEdge > plateRightFt) {
+      overhangs.push({
+        id: s.id,
+        x1: Math.max(leftEdge, plateRightFt),
+        x2: rightEdge,
+        y1: Math.max(bottomEl, plateBottomEl),
+        y2: Math.min(topEl, plateTopEl),
+        type: 'right'
+      });
+    }
+
+    // Check bottom overhang (below plate)
+    if (bottomEl < plateBottomEl) {
+      overhangs.push({
+        id: s.id,
+        x1: Math.max(leftEdge, plateLeftFt),
+        x2: Math.min(rightEdge, plateRightFt),
+        y1: bottomEl,
+        y2: Math.min(topEl, plateBottomEl),
+        type: 'bottom'
+      });
+    }
+
+    // Check top overhang (above plate)
+    if (topEl > plateTopEl) {
+      overhangs.push({
+        id: s.id,
+        x1: Math.max(leftEdge, plateLeftFt),
+        x2: Math.min(rightEdge, plateRightFt),
+        y1: Math.max(bottomEl, plateTopEl),
+        y2: topEl,
+        type: 'top'
+      });
+    }
+  });
+
+  return overhangs;
+}
+
 interface OutfallProfileProps {
   structures: OutfallStructure[];
   pondInvert: number;
@@ -116,6 +213,9 @@ export default function OutfallProfileSVG({
   const plateRenderX = graphCenterX - plateRenderWidth / 2;
   const plateRenderY = getY(pondInvert + plateSize.height);
 
+  // Detect structures that "hang" off the plate using the exported helper
+  const overhangs = detectOverhangs(structures, plateSize, pondInvert);
+
   return (
     <div className="h-full bg-card border-l border-border flex flex-col shadow-xl relative">
         <div className="p-4 border-b border-border bg-muted/10 space-y-3">
@@ -139,25 +239,31 @@ export default function OutfallProfileSVG({
             <div>
               <label className="block text-xs text-muted-foreground mb-1">Plate Size (ft)</label>
               <div className="flex items-center gap-2">
-                <input 
-                  type="number" 
-                  step="0.5"
-                  value={plateSize.width}
-                  onChange={(e) => onPlateSizeChange({ ...plateSize, width: parseFloat(e.target.value) || 0 })}
-                  className="w-16 bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
-                  placeholder="W"
-                  aria-label="Plate width in feet"
-                />
-                <span className="text-muted-foreground">×</span>
-                <input 
-                  type="number" 
-                  step="0.5"
-                  value={plateSize.height}
-                  onChange={(e) => onPlateSizeChange({ ...plateSize, height: parseFloat(e.target.value) || 0 })}
-                  className="w-16 bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
-                  placeholder="H"
-                  aria-label="Plate height in feet"
-                />
+                <div className="flex flex-col items-center">
+                  <span className="text-[10px] text-muted-foreground mb-0.5">Width</span>
+                  <input 
+                    type="number" 
+                    step="0.5"
+                    value={plateSize.width}
+                    onChange={(e) => onPlateSizeChange({ ...plateSize, width: parseFloat(e.target.value) || 0 })}
+                    className="w-16 bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                    placeholder="W"
+                    aria-label="Plate width in feet"
+                  />
+                </div>
+                <span className="text-muted-foreground mt-4">×</span>
+                <div className="flex flex-col items-center">
+                  <span className="text-[10px] text-muted-foreground mb-0.5">Height</span>
+                  <input 
+                    type="number" 
+                    step="0.5"
+                    value={plateSize.height}
+                    onChange={(e) => onPlateSizeChange({ ...plateSize, height: parseFloat(e.target.value) || 0 })}
+                    className="w-16 bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                    placeholder="H"
+                    aria-label="Plate height in feet"
+                  />
+                </div>
               </div>
             </div>
         </div>
@@ -416,6 +522,52 @@ export default function OutfallProfileSVG({
                                 height={overlapHeight}
                                 fill="none"
                                 stroke="#dc2626"
+                                strokeWidth="2"
+                                strokeDasharray="4 2"
+                            />
+                        </g>
+                    );
+                })}
+
+                {/* Overhang Regions - Draw ORANGE zones for structures extending beyond plate */}
+                {overhangs.map((overhang, idx) => {
+                    const overhangWidthFt = overhang.x2 - overhang.x1;
+                    const overhangHeightFt = overhang.y2 - overhang.y1;
+                    
+                    // Skip if dimensions are invalid
+                    if (overhangWidthFt <= 0 || overhangHeightFt <= 0) return null;
+                    
+                    const overhangCenterX = (overhang.x1 + overhang.x2) / 2;
+                    
+                    const ohX1 = getX(overhangCenterX) - getWidthPixels(overhangWidthFt) / 2;
+                    const ohX2 = getX(overhangCenterX) + getWidthPixels(overhangWidthFt) / 2;
+                    const ohY1 = getY(overhang.y2); // Top (lower Y in SVG)
+                    const ohY2 = getY(overhang.y1); // Bottom (higher Y in SVG)
+                    
+                    const ohWidth = ohX2 - ohX1;
+                    const ohHeight = ohY2 - ohY1;
+                    
+                    if (isNaN(ohX1) || isNaN(ohX2) || isNaN(ohY1) || isNaN(ohY2) || ohWidth <= 0 || ohHeight <= 0) return null;
+                    
+                    return (
+                        <g key={`overhang-${idx}`}>
+                            {/* Orange fill */}
+                            <rect
+                                x={ohX1}
+                                y={ohY1}
+                                width={ohWidth}
+                                height={ohHeight}
+                                fill="#f97316"
+                                fillOpacity="0.5"
+                            />
+                            {/* Orange border */}
+                            <rect
+                                x={ohX1}
+                                y={ohY1}
+                                width={ohWidth}
+                                height={ohHeight}
+                                fill="none"
+                                stroke="#ea580c"
                                 strokeWidth="2"
                                 strokeDasharray="4 2"
                             />

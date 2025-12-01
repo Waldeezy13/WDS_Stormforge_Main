@@ -12,6 +12,9 @@ import { ReturnPeriod, getCitiesByState, City, InterpolationMethod } from '@/uti
 import { SiteParams, ModifiedRationalMethod, ModifiedRationalResult } from '@/utils/rationalMethod';
 import { StageStorageCurve } from '@/utils/stageStorage';
 import { ProjectMetadata, exportToStormforgeJson, downloadStormforgeJson, DrainageCalculationResult } from '@/utils/stormforgeImport';
+import { SolvedStormResult, EnhancedSolverResult, EnhancedSolverOutput, runEnhancedOutfallSolver } from '@/utils/pondRouting';
+import { OutfallStructure } from '@/utils/hydraulics';
+import { getAutoSolveEnabled } from '@/utils/hydraulicsConfig';
 import type { DrainageArea } from '@/utils/drainageCalculations';
 
 export type PondMode = 'generic' | 'custom';
@@ -20,6 +23,8 @@ export type PondMode = 'generic' | 'custom';
 const DRAINAGE_AREAS_KEY = 'wds-stormforge-drainage-areas';
 const CALC_RESULTS_KEY = 'wds-stormforge-calc-results';
 const PROJECT_META_KEY = 'wds-stormforge-project-meta';
+const OUTFALL_STRUCTURES_KEY = 'outfallDesigner_structures';
+const TAILWATER_KEY = 'outfallDesigner_tailwater';
 
 export default function Home() {
   // Global State
@@ -208,6 +213,151 @@ export default function Home() {
   }, [stageStorageCurve]);
   
   const [pondResults, setPondResults] = useState<ModifiedRationalResult[]>([]);
+  
+  // Outfall structures state (lifted from OutfallDesigner for solver access)
+  const [outfallStructures, setOutfallStructuresState] = useState<OutfallStructure[]>(() => {
+    if (typeof window === 'undefined') {
+      return [{ id: '1', type: 'circular', invertElevation: 100, horizontalOffsetFt: 0, diameterFt: 1, dischargeCoefficient: 0.6 }];
+    }
+    const stored = localStorage.getItem(OUTFALL_STRUCTURES_KEY);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      } catch (e) {
+        console.error('Failed to parse stored structures:', e);
+      }
+    }
+    return [{ id: '1', type: 'circular', invertElevation: 100, horizontalOffsetFt: 0, diameterFt: 1, dischargeCoefficient: 0.6 }];
+  });
+  
+  const [tailwaterElevations, setTailwaterElevationsState] = useState<Record<string, number>>(() => {
+    if (typeof window === 'undefined') {
+      return {};
+    }
+    const stored = localStorage.getItem(TAILWATER_KEY);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (typeof parsed === 'object' && parsed !== null) {
+          return parsed;
+        }
+      } catch (e) {
+        console.error('Failed to parse stored tailwater:', e);
+      }
+    }
+    return {};
+  });
+  
+  // Solved outfall results (from iterative solver)
+  const [solvedResults, setSolvedResults] = useState<SolvedStormResult[]>([]);
+  const [enhancedSolverOutput, setEnhancedSolverOutput] = useState<EnhancedSolverOutput | null>(null);
+  const [isSolving, setIsSolving] = useState(false);
+  const [solverNeedsRerun, setSolverNeedsRerun] = useState(true);
+  
+  // Wrapped setters that persist to localStorage and mark solver as needing rerun
+  const setOutfallStructures = useCallback((newStructures: OutfallStructure[] | ((prev: OutfallStructure[]) => OutfallStructure[])) => {
+    setOutfallStructuresState(prev => {
+      const resolved = typeof newStructures === 'function' ? newStructures(prev) : newStructures;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(OUTFALL_STRUCTURES_KEY, JSON.stringify(resolved));
+      }
+      return resolved;
+    });
+    setSolverNeedsRerun(true);
+    setSolvedResults([]); // Clear solved results when structures change
+    setEnhancedSolverOutput(null);
+  }, []);
+  
+  const setTailwaterElevations = useCallback((newTailwater: Record<string, number> | ((prev: Record<string, number>) => Record<string, number>)) => {
+    setTailwaterElevationsState(prev => {
+      const resolved = typeof newTailwater === 'function' ? newTailwater(prev) : newTailwater;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(TAILWATER_KEY, JSON.stringify(resolved));
+      }
+      return resolved;
+    });
+    setSolverNeedsRerun(true);
+    setSolvedResults([]); // Clear solved results when tailwater changes
+    setEnhancedSolverOutput(null);
+  }, []);
+  
+  // Calculate pond top elevation
+  const pondTopElevation = useMemo(() => {
+    if (pondMode === 'custom' && stageStorageCurve && stageStorageCurve.points.length > 0) {
+      return stageStorageCurve.points[stageStorageCurve.points.length - 1].elevation;
+    }
+    return pondInvertElevation + pondDims.depth;
+  }, [pondMode, stageStorageCurve, pondInvertElevation, pondDims.depth]);
+  
+  // Function to run the enhanced 3-step solver
+  const runOutfallSolver = useCallback((autoSizeStructures: boolean = true) => {
+    if (pondResults.length === 0) {
+      setSolvedResults([]);
+      setEnhancedSolverOutput(null);
+      return;
+    }
+    
+    setIsSolving(true);
+    
+    // Use setTimeout to allow UI to update before heavy computation
+    setTimeout(() => {
+      try {
+        const pondAreaSqFt = pondDims.length * pondDims.width;
+        
+        // Run the enhanced 3-step solver
+        const output = runEnhancedOutfallSolver(
+          pondMode,
+          pondAreaSqFt,
+          pondInvertElevation,
+          stageStorageCurve,
+          pondTopElevation,
+          outfallStructures,
+          tailwaterElevations,
+          pondResults
+        );
+        
+        setEnhancedSolverOutput(output);
+        
+        // Convert enhanced results to legacy format for backward compatibility
+        const legacyResults: SolvedStormResult[] = output.results.map(r => ({
+          stormEvent: r.stormEvent,
+          converged: r.converged,
+          iterations: r.iterations,
+          originalWSE: r.originalWSE,
+          originalVolumeCf: 0, // Not tracked in enhanced
+          allowableQCfs: r.allowableQCfs,
+          peakInflowCfs: 0, // Not tracked in enhanced
+          solvedWSE: r.solvedWSE,
+          solvedVolumeCf: 0, // Not tracked in enhanced
+          actualQCfs: r.actualQCfs,
+          qError: Math.abs(r.actualQCfs - r.allowableQCfs),
+          wseError: 0,
+          warning: r.statusMessage
+        }));
+        
+        setSolvedResults(legacyResults);
+        
+        // Update structures with sized values if auto-sizing
+        if (autoSizeStructures && output.sizedStructures.length > 0) {
+          setOutfallStructuresState(output.sizedStructures);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem(OUTFALL_STRUCTURES_KEY, JSON.stringify(output.sizedStructures));
+          }
+        }
+        
+        setSolverNeedsRerun(false);
+      } catch (error) {
+        console.error('Solver error:', error);
+        setSolvedResults([]);
+        setEnhancedSolverOutput(null);
+      } finally {
+        setIsSolving(false);
+      }
+    }, 10);
+  }, [pondResults, outfallStructures, tailwaterElevations, pondMode, pondDims, pondInvertElevation, stageStorageCurve, pondTopElevation]);
 
   useEffect(() => {
     if (cityId === 0) {
@@ -223,6 +373,8 @@ export default function Home() {
           )
         );
         setPondResults(calculatedResults);
+        setSolverNeedsRerun(true);
+        setSolvedResults([]); // Clear solved results when pond results change
       } catch (error) {
         console.error('Error calculating pond results:', error);
         setPondResults([]);
@@ -231,6 +383,20 @@ export default function Home() {
 
     calculateResults();
   }, [cityId, selectedEvents, preDev, postDev, interpolationMethod]);
+
+  // Mark solver as needing rerun when pond dims or mode change
+  useEffect(() => {
+    setSolverNeedsRerun(true);
+    setSolvedResults([]);
+    setEnhancedSolverOutput(null);
+  }, [pondDims, pondMode, pondInvertElevation, stageStorageCurve]);
+
+  // Auto-solve effect
+  useEffect(() => {
+    if (getAutoSolveEnabled() && solverNeedsRerun && pondResults.length > 0 && !isSolving) {
+      runOutfallSolver();
+    }
+  }, [solverNeedsRerun, pondResults, isSolving, runOutfallSolver]);
 
   const selectedCity = useMemo(() => {
     return Object.values(citiesByState)
@@ -318,6 +484,8 @@ export default function Home() {
                onStageStorageCurveChange={setStageStorageCurve}
                pondInvertElevation={pondInvertElevation}
                onPondInvertElevationChange={setPondInvertElevation}
+               solvedResults={solvedResults}
+               enhancedSolverOutput={enhancedSolverOutput}
              />
            </div>
         )}
@@ -329,6 +497,15 @@ export default function Home() {
              pondInvertElevation={pondInvertElevation}
              pondMode={pondMode}
              stageStorageCurve={stageStorageCurve}
+             structures={outfallStructures}
+             onStructuresChange={setOutfallStructures}
+             tailwaterElevations={tailwaterElevations}
+             onTailwaterChange={setTailwaterElevations}
+             solvedResults={solvedResults}
+             enhancedSolverOutput={enhancedSolverOutput}
+             isSolving={isSolving}
+             solverNeedsRerun={solverNeedsRerun}
+             onRunSolver={runOutfallSolver}
            />
         )}
 

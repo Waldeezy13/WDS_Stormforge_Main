@@ -1,13 +1,16 @@
 'use client';
 
 import React, { useState, useMemo, useRef, useCallback } from 'react';
-import { Trash2, Plus, CheckCircle, XCircle, AlertTriangle, ChevronDown, ChevronUp, Droplets, Waves, ArrowDownToLine, GripVertical, Sparkles, Loader2, X, ChevronUp as ChevronUpIcon, ChevronDown as ChevronDownIcon, Layers } from 'lucide-react';
+import { Trash2, Plus, CheckCircle, XCircle, AlertTriangle, ChevronDown, ChevronUp, Droplets, Waves, ArrowDownToLine, GripVertical, Sparkles, Loader2, X, ChevronUp as ChevronUpIcon, ChevronDown as ChevronDownIcon, Layers, Play, AlertCircle, Info, Circle, Square, BarChart3 } from 'lucide-react';
 import { OutfallStructure, OutfallStructureType, calculateTotalDischarge, detectOverlaps, solveStructureSize, roundToPrecision, getStructureDischarge } from '@/utils/hydraulics';
-import { getOrificeStackingOffset } from '@/utils/hydraulicsConfig';
+import { getOrificeStackingOffset, getAutoSolveEnabled, setAutoSolveEnabled } from '@/utils/hydraulicsConfig';
 import { ModifiedRationalResult } from '@/utils/rationalMethod';
 import { StageStorageCurve, getElevationAtVolume } from '@/utils/stageStorage';
+import { SolvedStormResult, EnhancedSolverOutput } from '@/utils/pondRouting';
 import type { PondMode } from '../page';
-import OutfallProfileSVG, { OutfallStyle } from './outfall/OutfallProfileSVG';
+import OutfallProfileSVG, { OutfallStyle, detectOverhangs } from './outfall/OutfallProfileSVG';
+import RatingCurveChart from './charts/RatingCurveChart';
+import HydrographChart, { StormHydrograph, generateSyntheticHydrograph } from './charts/HydrographChart';
 
 interface PondDims {
   length: number;
@@ -21,40 +24,45 @@ interface OutfallDesignerProps {
   pondInvertElevation?: number;
   pondMode?: PondMode;
   stageStorageCurve?: StageStorageCurve | null;
+  // Lifted state from page.tsx
+  structures: OutfallStructure[];
+  onStructuresChange: (structures: OutfallStructure[] | ((prev: OutfallStructure[]) => OutfallStructure[])) => void;
+  tailwaterElevations: Record<string, number>;
+  onTailwaterChange: (tailwater: Record<string, number> | ((prev: Record<string, number>) => Record<string, number>)) => void;
+  // Solver state
+  solvedResults: SolvedStormResult[];
+  enhancedSolverOutput?: EnhancedSolverOutput | null;
+  isSolving: boolean;
+  solverNeedsRerun: boolean;
+  onRunSolver: (autoSize?: boolean) => void;
 }
 
-// LocalStorage keys for persistence
-const STORAGE_KEY_STRUCTURES = 'outfallDesigner_structures';
+// LocalStorage keys for persistence (only for plate size and outfall style now)
 const STORAGE_KEY_PLATE_SIZE = 'outfallDesigner_plateSize';
 const STORAGE_KEY_OUTFALL_STYLE = 'outfallDesigner_outfallStyle';
-const STORAGE_KEY_TAILWATER = 'outfallDesigner_tailwater';
 
-export default function OutfallDesigner({ results, pondDims, pondInvertElevation = 0, pondMode = 'generic', stageStorageCurve }: OutfallDesignerProps) {
+export default function OutfallDesigner({ 
+  results, 
+  pondDims, 
+  pondInvertElevation = 0, 
+  pondMode = 'generic', 
+  stageStorageCurve,
+  structures,
+  onStructuresChange,
+  tailwaterElevations,
+  onTailwaterChange,
+  solvedResults,
+  enhancedSolverOutput,
+  isSolving,
+  solverNeedsRerun,
+  onRunSolver
+}: OutfallDesignerProps) {
   // Calculate derived pond values
   const pondAreaSqFt = pondDims.length * pondDims.width;
   const pondTopElevation = pondMode === 'custom' && stageStorageCurve && stageStorageCurve.points.length > 0
     ? stageStorageCurve.points[stageStorageCurve.points.length - 1].elevation
     : pondInvertElevation + pondDims.depth;
   
-  // Helper to get initial structures from localStorage or default
-  const getInitialStructures = (): OutfallStructure[] => {
-    if (typeof window === 'undefined') {
-      return [{ id: '1', type: 'circular', invertElevation: pondInvertElevation, horizontalOffsetFt: 0, diameterFt: 1, dischargeCoefficient: 0.6 }];
-    }
-    const stored = localStorage.getItem(STORAGE_KEY_STRUCTURES);
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      } catch (e) {
-        console.error('Failed to parse stored structures:', e);
-      }
-    }
-    return [{ id: '1', type: 'circular', invertElevation: pondInvertElevation, horizontalOffsetFt: 0, diameterFt: 1, dischargeCoefficient: 0.6 }];
-  };
-
   // Helper to get initial plate size from localStorage or default
   const getInitialPlateSize = (): { width: number; height: number } => {
     if (typeof window === 'undefined') {
@@ -86,30 +94,12 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
     return 'orifice_plate';
   };
 
-  // Helper to get initial tailwater elevations from localStorage or default
-  const getInitialTailwater = (): Record<string, number> => {
-    if (typeof window === 'undefined') {
-      return {};
-    }
-    const stored = localStorage.getItem(STORAGE_KEY_TAILWATER);
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        if (typeof parsed === 'object' && parsed !== null) {
-          return parsed;
-        }
-      } catch (e) {
-        console.error('Failed to parse stored tailwater:', e);
-      }
-    }
-    return {};
-  };
-
-  // Outfall configuration state with persistence
+  // Outfall configuration state with persistence (only plate size and style are local now)
   const [outfallStyle, setOutfallStyleState] = useState<OutfallStyle>(getInitialOutfallStyle);
   const [plateSize, setPlateSizeState] = useState(getInitialPlateSize);
-  const [structures, setStructuresState] = useState<OutfallStructure[]>(getInitialStructures);
-  const [tailwaterElevations, setTailwaterElevationsState] = useState<Record<string, number>>(getInitialTailwater);
+  
+  // Auto-solve toggle (local state that syncs with localStorage)
+  const [autoSolveEnabled, setAutoSolveEnabledState] = useState(() => getAutoSolveEnabled());
   
   // Wrapped setters that also persist to localStorage
   const setOutfallStyle = (style: OutfallStyle) => {
@@ -126,28 +116,16 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
     }
   };
 
-  const setStructures = (newStructures: OutfallStructure[] | ((prev: OutfallStructure[]) => OutfallStructure[])) => {
-    setStructuresState(prev => {
-      const resolved = typeof newStructures === 'function' ? newStructures(prev) : newStructures;
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(STORAGE_KEY_STRUCTURES, JSON.stringify(resolved));
-      }
-      return resolved;
-    });
-  };
-
-  const setTailwaterElevations = (newTailwater: Record<string, number> | ((prev: Record<string, number>) => Record<string, number>)) => {
-    setTailwaterElevationsState(prev => {
-      const resolved = typeof newTailwater === 'function' ? newTailwater(prev) : newTailwater;
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(STORAGE_KEY_TAILWATER, JSON.stringify(resolved));
-      }
-      return resolved;
-    });
-  };
+  // Use the lifted state setters with aliased names for compatibility
+  const setStructures = onStructuresChange;
+  const setTailwaterElevations = onTailwaterChange;
 
   const [selectedDetailEvent, setSelectedDetailEvent] = useState<string | null>(null);
   const [expandedDerivations, setExpandedDerivations] = useState<Set<string>>(new Set());
+  
+  // Visualization panel state
+  const [showVisualization, setShowVisualization] = useState(true);
+  const [selectedVisualizationStorm, setSelectedVisualizationStorm] = useState<string | null>(null);
   
   // Solver state
   const [solvingForStorm, setSolvingForStorm] = useState<string | null>(null);
@@ -188,6 +166,9 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
   
   // Detect overlaps
   const overlaps = useMemo(() => detectOverlaps(structures), [structures]);
+  
+  // Detect overhangs (structures extending beyond plate boundaries)
+  const overhangs = useMemo(() => detectOverhangs(structures, plateSize, pondInvertElevation), [structures, plateSize, pondInvertElevation]);
   
   // Toggle derivation expansion
   const toggleDerivation = (stageId: string) => {
@@ -416,6 +397,44 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
     }))
   ];
 
+  // Prepare Rating Curve chart data
+  const ratingCurveStormData = useMemo(() => {
+    return summaryData.map(d => ({
+      stormEvent: d.res.stormEvent,
+      allowableQCfs: d.res.allowableReleaseRateCfs,
+      designHeadFt: d.wse - pondInvertElevation,
+      actualQCfs: d.totalDischarge,
+      wse: d.wse
+    }));
+  }, [summaryData, pondInvertElevation]);
+
+  // Prepare Hydrograph data
+  const hydrographData = useMemo<StormHydrograph[]>(() => {
+    if (structures.length === 0) return [];
+    
+    // Create a rating curve function for outflow calculation
+    const outflowRatingCurve = (wse: number): number => {
+      const { totalDischarge } = calculateTotalDischarge(structures, wse, undefined);
+      return totalDischarge;
+    };
+    
+    return summaryData.map(d => {
+      // Get time of concentration from the result (or default to 15 min)
+      const tcMinutes = d.res.criticalDurationMinutes || 15;
+      
+      return generateSyntheticHydrograph(
+        d.res.stormEvent,
+        tcMinutes,
+        d.res.peakInflowCfs,
+        d.res.allowableReleaseRateCfs,
+        d.res.requiredStorageCf,
+        pondInvertElevation,
+        pondAreaSqFt,
+        outflowRatingCurve
+      );
+    });
+  }, [summaryData, structures, pondInvertElevation, pondAreaSqFt]);
+
   return (
     <div className="h-full flex bg-slate-50/50 dark:bg-slate-900/50 overflow-hidden">
       
@@ -439,6 +458,30 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                 {overlaps.map((overlap, idx) => (
                   <li key={idx}>
                     Stages {overlap.structures.join(' & ')} overlap horizontally at {overlap.x1.toFixed(2)}&apos; - {overlap.x2.toFixed(2)}&apos; (elevation {overlap.y1.toFixed(2)}&apos; - {overlap.y2.toFixed(2)}&apos;)
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
+        
+        {/* Overhang Warning */}
+        {overhangs.length > 0 && (
+          <div className="bg-orange-500/10 border border-orange-500/30 rounded-lg p-4 flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-orange-500 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h4 className="font-semibold text-orange-600 dark:text-orange-400 mb-1">Openings Extend Beyond Plate</h4>
+              <p className="text-sm text-muted-foreground">
+                {overhangs.length} opening{overhangs.length > 1 ? 's extend' : ' extends'} beyond the {plateSize.width}&apos; × {plateSize.height}&apos; plate boundaries. 
+                Overhanging areas are highlighted in <span className="text-orange-500 font-medium">ORANGE</span> in the profile view.
+              </p>
+              <p className="text-xs text-muted-foreground mt-1 italic">
+                Adjust the plate size or orifice dimensions/positions to fit within the plate.
+              </p>
+              <ul className="mt-2 text-xs text-muted-foreground list-disc list-inside space-y-1">
+                {overhangs.map((overhang, idx) => (
+                  <li key={idx}>
+                    Stage #{overhang.id} extends {overhang.type === 'left' ? 'left' : overhang.type === 'right' ? 'right' : overhang.type === 'top' ? 'above' : 'below'} the plate
                   </li>
                 ))}
               </ul>
@@ -608,6 +651,240 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                 )}
               </div>
             </div>
+            <div className="flex items-start gap-2 text-xs text-muted-foreground">
+              <Info className="w-4 h-4 flex-shrink-0 mt-0.5 text-blue-400" />
+              <div className="flex-1">
+                <span className="font-medium text-blue-400">Note:</span> Tailwater elevations must be verified independently based on downstream conditions and actual outfall discharge. 
+                Adjust tailwater and re-solve if actual Q differs significantly from design assumptions.
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Solver Controls */}
+        <section className="bg-card border border-border rounded-lg p-4">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <h3 className="font-semibold flex items-center gap-2">
+                <Play className="w-5 h-5 text-primary" />
+                Outfall Solver
+              </h3>
+              {/* Status badges */}
+              {enhancedSolverOutput && (
+                enhancedSolverOutput.overallStatus === 'success' ? (
+                  <span className="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded flex items-center gap-1">
+                    <CheckCircle className="w-3 h-3" />
+                    All storms OK
+                  </span>
+                ) : enhancedSolverOutput.overallStatus === 'failed' ? (
+                  <span className="text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3" />
+                    Issues detected
+                  </span>
+                ) : (
+                  <span className="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" />
+                    {enhancedSolverOutput.overallMessage || 'Warnings detected'}
+                  </span>
+                )
+              )}
+              {solverNeedsRerun && solvedResults.length > 0 && !enhancedSolverOutput && (
+                <span className="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3" />
+                  Inputs changed - re-solve recommended
+                </span>
+              )}
+            </div>
+            
+            <div className="flex items-center gap-4">
+              {/* Auto-Solve Toggle */}
+              <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+                <span>Auto-Solve</span>
+                <button
+                  onClick={() => {
+                    const newValue = !autoSolveEnabled;
+                    setAutoSolveEnabledState(newValue);
+                    setAutoSolveEnabled(newValue);
+                  }}
+                  className={`relative w-10 h-5 rounded-full transition-colors ${
+                    autoSolveEnabled ? 'bg-primary' : 'bg-gray-600'
+                  }`}
+                  aria-label="Toggle auto-solve"
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
+                      autoSolveEnabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </label>
+              
+              {/* Solve Button */}
+              <button
+                onClick={() => onRunSolver()}
+                disabled={isSolving || structures.length === 0 || results.length === 0}
+                className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isSolving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Solving...</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4" />
+                    <span>Solve &amp; Size Orifices</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+          
+          {/* Enhanced Solver Results Table */}
+          {enhancedSolverOutput && enhancedSolverOutput.results.length > 0 && (
+            <div className="mt-4">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 text-muted-foreground text-xs uppercase">
+                    <tr>
+                      <th className="p-2 text-left">Storm</th>
+                      <th className="p-2 text-right">Allowable Q</th>
+                      <th className="p-2 text-center">Sized Orifice</th>
+                      <th className="p-2 text-right">Original WSE</th>
+                      <th className="p-2 text-right">Solved WSE</th>
+                      <th className="p-2 text-right">Actual Q</th>
+                      <th className="p-2 text-right">Freeboard</th>
+                      <th className="p-2 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {enhancedSolverOutput.results.map((result) => {
+                      const statusColor = result.status === 'ok' 
+                        ? 'text-emerald-400' 
+                        : result.status === 'warning' 
+                          ? 'text-amber-400' 
+                          : 'text-red-400';
+                      const rowBg = result.status === 'ok' 
+                        ? 'bg-emerald-500/5' 
+                        : result.status === 'warning' 
+                          ? 'bg-amber-500/5' 
+                          : 'bg-red-500/5';
+                      
+                      return (
+                        <tr key={result.stormEvent} className={rowBg}>
+                          <td className="p-2 font-bold uppercase">{result.stormEvent}</td>
+                          <td className="p-2 text-right font-mono">{result.allowableQCfs.toFixed(2)} cfs</td>
+                          <td className="p-2 text-center font-mono text-xs">
+                            {result.sizeDiameterFt != null ? (
+                              <span className="bg-primary/20 text-primary px-1.5 py-0.5 rounded">
+                                ⌀{result.sizeDiameterFt.toFixed(2)}&apos;
+                              </span>
+                            ) : result.sizeWidthFt != null && result.sizeHeightFt != null ? (
+                              <span className="bg-primary/20 text-primary px-1.5 py-0.5 rounded">
+                                {result.sizeWidthFt.toFixed(2)}&apos;×{result.sizeHeightFt.toFixed(2)}&apos;
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </td>
+                          <td className="p-2 text-right font-mono text-muted-foreground">{result.originalWSE.toFixed(2)} ft</td>
+                          <td className="p-2 text-right font-mono font-bold">{result.solvedWSE.toFixed(2)} ft</td>
+                          <td className={`p-2 text-right font-mono font-bold ${result.actualQCfs <= result.allowableQCfs ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {result.actualQCfs.toFixed(2)} cfs
+                          </td>
+                          <td className={`p-2 text-right font-mono ${result.freeboardFt < 0.5 ? 'text-amber-400' : 'text-muted-foreground'}`}>
+                            {result.freeboardFt.toFixed(2)} ft
+                          </td>
+                          <td className={`p-2 text-center font-bold ${statusColor}`}>
+                            {result.status === 'ok' && <CheckCircle className="w-4 h-4 inline" />}
+                            {result.status === 'warning' && <AlertCircle className="w-4 h-4 inline" />}
+                            {result.status === 'error' && <AlertTriangle className="w-4 h-4 inline" />}
+                            <span className="ml-1 text-xs">{result.statusMessage || result.status.toUpperCase()}</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              
+              {/* Apply Sized Structures Button */}
+              {enhancedSolverOutput.sizedStructures.length > 0 && (
+                <div className="mt-4 flex items-center justify-between p-3 bg-primary/10 rounded-lg border border-primary/30">
+                  <div className="text-sm">
+                    <span className="font-semibold text-primary">Solver sized {enhancedSolverOutput.sizedStructures.length} structure(s)</span>
+                    <span className="text-muted-foreground ml-2">
+                      Click to apply the optimized dimensions to your structures
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      // Apply the sized structures
+                      const newStructures = structures.map(struct => {
+                        const sized = enhancedSolverOutput.sizedStructures.find(s => s.id === struct.id);
+                        if (sized) {
+                          return {
+                            ...struct,
+                            type: sized.type,
+                            diameterFt: sized.diameterFt,
+                            widthFt: sized.widthFt,
+                            heightFt: sized.heightFt,
+                          };
+                        }
+                        return struct;
+                      });
+                      setStructures(newStructures);
+                    }}
+                    className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg hover:bg-primary/90 transition-colors text-sm font-semibold"
+                  >
+                    <CheckCircle className="w-4 h-4" />
+                    Apply Sized Structures
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* Fallback: Legacy solver results if no enhanced output */}
+          {!enhancedSolverOutput && solvedResults.length > 0 && (
+            <div className="mt-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+              {solvedResults.map(sr => (
+                <div 
+                  key={sr.stormEvent}
+                  className={`p-3 rounded-lg border ${
+                    sr.converged 
+                      ? sr.actualQCfs <= sr.allowableQCfs
+                        ? 'bg-emerald-500/10 border-emerald-500/30'
+                        : 'bg-red-500/10 border-red-500/30'
+                      : 'bg-amber-500/10 border-amber-500/30'
+                  }`}
+                >
+                  <div className="text-xs font-bold uppercase mb-1">{sr.stormEvent}</div>
+                  <div className="flex items-baseline gap-1">
+                    <span className={`text-lg font-mono font-bold ${
+                      sr.actualQCfs <= sr.allowableQCfs ? 'text-emerald-400' : 'text-red-400'
+                    }`}>
+                      {sr.actualQCfs.toFixed(2)}
+                    </span>
+                    <span className="text-xs text-gray-500">cfs</span>
+                  </div>
+                  <div className="text-[10px] text-gray-500 mt-1">
+                    Allowable: {sr.allowableQCfs.toFixed(2)} cfs
+                  </div>
+                  {!sr.converged && sr.warning && (
+                    <div className="text-[10px] text-amber-400 mt-1 truncate" title={sr.warning}>
+                      ⚠ {sr.iterations} iterations
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          
+          {/* Help text */}
+          <div className="mt-3 text-xs text-muted-foreground">
+            The solver sizes orifices to maximize flow without exceeding allowable Q, then solves for equilibrium water surface elevation.
+            {structures.length === 0 && <span className="text-amber-400 ml-2">Add structures to enable solving.</span>}
           </div>
         </section>
 
@@ -1185,6 +1462,109 @@ export default function OutfallDesigner({ results, pondDims, pondInvertElevation
                   Collapse All
                 </button>
               </div>
+            </div>
+          )}
+        </section>
+
+        {/* 3. Visualization Section - Rating Curve & Hydrograph Charts */}
+        <section className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
+          {/* Header with toggle */}
+          <div className="flex items-center justify-between p-4 border-b border-border bg-muted/20">
+            <h3 className="text-lg font-semibold flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-primary" />
+              Solver Visualization
+            </h3>
+            <button
+              onClick={() => setShowVisualization(!showVisualization)}
+              className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {showVisualization ? (
+                <>
+                  <ChevronUp className="w-4 h-4" />
+                  <span>Hide Charts</span>
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="w-4 h-4" />
+                  <span>Show Charts</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {showVisualization && (
+            <div className="p-6 space-y-6">
+              {structures.length === 0 || results.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  <BarChart3 className="w-12 h-12 mx-auto mb-4 opacity-30" />
+                  <p className="text-sm">
+                    {structures.length === 0 
+                      ? 'Add outfall structures to view the rating curve visualization.'
+                      : 'No storm data available. Configure storm events in the Hydrology tab.'}
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Rating Curve Chart */}
+                  <div>
+                    <RatingCurveChart
+                      structures={structures}
+                      pondInvertElevation={pondInvertElevation}
+                      pondTopElevation={pondTopElevation}
+                      stormData={ratingCurveStormData}
+                      tailwaterElevations={tailwaterElevations}
+                      selectedStorm={selectedVisualizationStorm}
+                      onStormClick={(storm) => setSelectedVisualizationStorm(storm)}
+                    />
+                  </div>
+
+                  {/* Hydrograph Chart */}
+                  {hydrographData.length > 0 && (
+                    <div>
+                      <HydrographChart
+                        hydrographs={hydrographData}
+                        pondInvertElevation={pondInvertElevation}
+                        pondTopElevation={pondTopElevation}
+                        selectedStorm={selectedVisualizationStorm || hydrographData[0]?.stormEvent}
+                        onStormChange={(storm) => setSelectedVisualizationStorm(storm)}
+                      />
+                    </div>
+                  )}
+
+                  {/* Chart Legend / Explanation */}
+                  <div className="bg-muted/20 rounded-lg p-4">
+                    <h4 className="text-sm font-semibold mb-3 text-foreground">Understanding the Charts</h4>
+                    <div className="grid md:grid-cols-2 gap-4 text-xs text-muted-foreground">
+                      <div>
+                        <p className="font-medium text-foreground mb-1">Rating Curve (Q vs Head)</p>
+                        <ul className="list-disc list-inside space-y-1">
+                          <li><span className="text-blue-400">Blue solid line</span> = Total plate Q(H) rating curve</li>
+                          <li>Dashed lines = Per-orifice Q curves (toggle in legend)</li>
+                          <li>Vertical lines = Design head for each storm</li>
+                          <li>Circles = Actual Q at design head (green = OK, red = exceeds)</li>
+                          <li>Horizontal dashes = Allowable Q targets per storm</li>
+                        </ul>
+                        <p className="mt-2 italic">
+                          A &quot;good&quot; solution has all circles at or below their allowable Q lines.
+                        </p>
+                      </div>
+                      <div>
+                        <p className="font-medium text-foreground mb-1">Hydrograph (WSE & Q vs Time)</p>
+                        <ul className="list-disc list-inside space-y-1">
+                          <li><span className="text-gray-400">Gray dashed</span> = Inflow hydrograph (Q<sub>in</sub>)</li>
+                          <li><span className="text-blue-400">Colored solid</span> = Outflow through structures (Q<sub>out</sub>)</li>
+                          <li><span className="text-emerald-400">Green solid</span> = Water surface elevation (WSE)</li>
+                          <li><span className="text-red-400">Red dashed</span> = Allowable Q limit</li>
+                          <li><span className="text-amber-400">Amber dashed</span> = Pond top (freeboard limit)</li>
+                        </ul>
+                        <p className="mt-2 italic">
+                          Q<sub>out</sub> should stay below Q<sub>allow</sub>; WSE should stay below pond top.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </section>

@@ -12,7 +12,19 @@ import {
   DEFAULT_ORIFICE_WEIR_TRANSITION_RATIO,
   getOrificeStackingOffset,
   setOrificeStackingOffset,
-  DEFAULT_ORIFICE_STACKING_OFFSET
+  DEFAULT_ORIFICE_STACKING_OFFSET,
+  getSolverQTolerance,
+  setSolverQTolerance,
+  DEFAULT_SOLVER_Q_TOLERANCE,
+  getSolverWSETolerance,
+  setSolverWSETolerance,
+  DEFAULT_SOLVER_WSE_TOLERANCE,
+  getSolverMaxIterations,
+  setSolverMaxIterations,
+  DEFAULT_SOLVER_MAX_ITERATIONS,
+  getAutoSolveEnabled,
+  setAutoSolveEnabled,
+  DEFAULT_AUTO_SOLVE_ENABLED
 } from '@/utils/hydraulicsConfig';
 import { clearAtlas14Cache, City } from '@/utils/atlas14';
 
@@ -43,6 +55,10 @@ export default function SettingsPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<{ id: number; name: string; state: string } | null>(null);
   const [transitionRatio, setTransitionRatio] = useState<number>(DEFAULT_ORIFICE_WEIR_TRANSITION_RATIO);
   const [stackingOffset, setStackingOffset] = useState<number>(DEFAULT_ORIFICE_STACKING_OFFSET);
+  const [solverQTolerance, setSolverQToleranceState] = useState<number>(DEFAULT_SOLVER_Q_TOLERANCE);
+  const [solverWSETolerance, setSolverWSEToleranceState] = useState<number>(DEFAULT_SOLVER_WSE_TOLERANCE);
+  const [solverMaxIterations, setSolverMaxIterationsState] = useState<number>(DEFAULT_SOLVER_MAX_ITERATIONS);
+  const [autoSolveEnabled, setAutoSolveEnabledState] = useState<boolean>(DEFAULT_AUTO_SOLVE_ENABLED);
   
   // Expandable sections
   const [engineeringExpanded, setEngineeringExpanded] = useState(true);
@@ -57,6 +73,10 @@ export default function SettingsPage() {
     // Load settings from localStorage
     setTransitionRatio(getOrificeWeirTransitionRatio());
     setStackingOffset(getOrificeStackingOffset());
+    setSolverQToleranceState(getSolverQTolerance());
+    setSolverWSEToleranceState(getSolverWSETolerance());
+    setSolverMaxIterationsState(getSolverMaxIterations());
+    setAutoSolveEnabledState(getAutoSolveEnabled());
   }, []);
 
   const loadCities = async () => {
@@ -356,6 +376,170 @@ export default function SettingsPage() {
                             <span className="font-medium text-gray-300">Default:</span> 0.10 ft
                             <br />
                             <span className="font-medium text-gray-300">Current:</span> {stackingOffset.toFixed(2)} ft
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Divider */}
+                <div className="border-t border-border pt-6">
+                  <h4 className="text-md font-semibold text-gray-200 mb-4">Outfall Solver Settings</h4>
+                </div>
+
+                {/* Auto-Solve Toggle */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Auto-Solve Outfall
+                  </label>
+                  <div className="flex items-center gap-4">
+                    <button
+                      onClick={() => {
+                        const newValue = !autoSolveEnabled;
+                        setAutoSolveEnabledState(newValue);
+                        setAutoSolveEnabled(newValue);
+                      }}
+                      className={`relative w-14 h-7 rounded-full transition-colors ${
+                        autoSolveEnabled ? 'bg-primary' : 'bg-gray-600'
+                      }`}
+                      aria-label="Toggle auto-solve"
+                    >
+                      <span
+                        className={`absolute top-1 left-1 w-5 h-5 bg-white rounded-full transition-transform ${
+                          autoSolveEnabled ? 'translate-x-7' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                    <div className="flex-1">
+                      <div className="flex items-start gap-2 text-xs text-gray-400">
+                        <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <p className="mb-1">
+                            When enabled, the outfall solver will automatically re-run when structures, tailwater, or pond parameters change.
+                          </p>
+                          <p>
+                            <span className="font-medium text-gray-300">Status:</span> {autoSolveEnabled ? 'Enabled' : 'Disabled'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Solver Q Tolerance */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Q Convergence Tolerance (cfs)
+                  </label>
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="number"
+                      step="0.001"
+                      min="0.001"
+                      max="1.0"
+                      value={solverQTolerance}
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value);
+                        if (!isNaN(value) && value > 0) {
+                          setSolverQToleranceState(value);
+                          setSolverQTolerance(value);
+                        }
+                      }}
+                      aria-label="Solver Q tolerance in cfs"
+                      className="w-24 bg-background border border-border rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-start gap-2 text-xs text-gray-400">
+                        <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <p className="mb-1">
+                            The solver stops when the difference between actual Q and target Q is within this tolerance.
+                          </p>
+                          <p>
+                            <span className="font-medium text-gray-300">Default:</span> 0.01 cfs
+                            <br />
+                            <span className="font-medium text-gray-300">Current:</span> {solverQTolerance.toFixed(3)} cfs
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Solver WSE Tolerance */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    WSE Convergence Tolerance (ft)
+                  </label>
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="number"
+                      step="0.001"
+                      min="0.001"
+                      max="1.0"
+                      value={solverWSETolerance}
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value);
+                        if (!isNaN(value) && value > 0) {
+                          setSolverWSEToleranceState(value);
+                          setSolverWSETolerance(value);
+                        }
+                      }}
+                      aria-label="Solver WSE tolerance in feet"
+                      className="w-24 bg-background border border-border rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-start gap-2 text-xs text-gray-400">
+                        <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <p className="mb-1">
+                            The solver stops when water surface elevation changes less than this between iterations.
+                          </p>
+                          <p>
+                            <span className="font-medium text-gray-300">Default:</span> 0.01 ft
+                            <br />
+                            <span className="font-medium text-gray-300">Current:</span> {solverWSETolerance.toFixed(3)} ft
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Solver Max Iterations */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Maximum Iterations
+                  </label>
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="number"
+                      step="1"
+                      min="10"
+                      max="200"
+                      value={solverMaxIterations}
+                      onChange={(e) => {
+                        const value = parseInt(e.target.value, 10);
+                        if (!isNaN(value) && value > 0) {
+                          setSolverMaxIterationsState(value);
+                          setSolverMaxIterations(value);
+                        }
+                      }}
+                      aria-label="Maximum solver iterations"
+                      className="w-24 bg-background border border-border rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-start gap-2 text-xs text-gray-400">
+                        <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <p className="mb-1">
+                            Maximum number of iterations before the solver gives up. Higher values allow more complex scenarios to converge.
+                          </p>
+                          <p>
+                            <span className="font-medium text-gray-300">Default:</span> 50
+                            <br />
+                            <span className="font-medium text-gray-300">Current:</span> {solverMaxIterations}
                           </p>
                         </div>
                       </div>

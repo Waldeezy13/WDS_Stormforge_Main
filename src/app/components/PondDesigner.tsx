@@ -7,7 +7,7 @@ import type { ModifiedRationalResult } from '@/utils/rationalMethod';
 import { ReturnPeriod, InterpolationMethod, getRainfallData } from '@/utils/atlas14';
 import { getIntensityInPerHr } from '@/utils/idf';
 import { ModifiedRationalMethod } from '@/utils/rationalMethod';
-import { Cuboid, Settings2, AlertTriangle, Droplets, TrendingUp, ChevronDown, Calculator, Upload, Plus, Trash2, Table } from 'lucide-react';
+import { Cuboid, Settings2, AlertTriangle, Droplets, TrendingUp, ChevronDown, Calculator, Upload, Plus, Trash2, Table, CheckCircle2, XCircle } from 'lucide-react';
 import { 
   StageStorageCurve, 
   StageStoragePoint, 
@@ -20,6 +20,7 @@ import {
 import type { PondMode } from '../page';
 import { PondMesh } from './pond/PondVisualization3D';
 import StageStorageChart from './charts/StageStorageChart';
+import type { SolvedStormResult, EnhancedSolverOutput } from '@/utils/pondRouting';
 
 // --- Required Storage by Storm Section ---
 function RequiredVolumesSection({ 
@@ -256,6 +257,8 @@ interface PondDesignerProps {
   onStageStorageCurveChange: (curve: StageStorageCurve | null) => void;
   pondInvertElevation: number;
   onPondInvertElevationChange: (elevation: number) => void;
+  solvedResults?: SolvedStormResult[];
+  enhancedSolverOutput?: EnhancedSolverOutput | null;
 }
 
 // --- Calculation Method Selector Component ---
@@ -814,7 +817,9 @@ export default function PondDesigner({
   stageStorageCurve,
   onStageStorageCurveChange,
   pondInvertElevation,
-  onPondInvertElevationChange: _onPondInvertElevationChange
+  onPondInvertElevationChange: _onPondInvertElevationChange,
+  solvedResults = [],
+  enhancedSolverOutput
 }: PondDesignerProps) {
   const [calculationMethod, setCalculationMethod] = useState<CalculationMethod>('modified-rational');
   const [iterationFrequency, setIterationFrequency] = useState<number>(1);
@@ -1108,7 +1113,14 @@ export default function PondDesigner({
                         <th className="px-3 py-2 text-right">Existing Q</th>
                         <th className="px-3 py-2 text-right">Proposed Q</th>
                         <th className="px-3 py-2 text-right">Allowable Q</th>
-                        <th className="px-3 py-2 text-right">ΔQ</th>
+                        <th className="px-3 py-2 text-right">Actual Q</th>
+                        {enhancedSolverOutput && (
+                          <>
+                            <th className="px-3 py-2 text-right">Solved WSE</th>
+                            <th className="px-3 py-2 text-right">Freeboard</th>
+                          </>
+                        )}
+                        <th className="px-3 py-2 text-center">Status</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border bg-card/40">
@@ -1116,8 +1128,17 @@ export default function PondDesigner({
                         const existingFlow = drainageTotals.existing.flowTotals[event] ?? 0;
                         const proposedFlow = drainageTotals.proposed.flowTotals[event] ?? 0;
                         const allowable = (allowableFlows[event] ?? existingFlow);
-                        const diff = proposedFlow - allowable;
-                        const isIncrease = diff > 0;
+                        
+                        // Use enhanced result if available, otherwise fall back to legacy
+                        const enhancedResult = enhancedSolverOutput?.results.find(r => r.stormEvent === event);
+                        const solvedResult = solvedResults.find(r => r.stormEvent === event);
+                        
+                        const actualQ = enhancedResult?.actualQCfs ?? solvedResult?.actualQCfs;
+                        const hasSolved = enhancedResult !== undefined || solvedResult !== undefined;
+                        const isConverged = enhancedResult?.converged ?? solvedResult?.converged ?? false;
+                        
+                        // Status: Check if actual Q exceeds allowable
+                        const exceedsAllowable = actualQ !== undefined && actualQ > allowable;
 
                         return (
                           <tr key={event} className="hover:bg-white/5 transition-colors">
@@ -1141,8 +1162,48 @@ export default function PondDesigner({
                                 aria-label="Allowable flow rate (cfs)"
                               />
                             </td>
-                            <td className={`px-3 py-2 text-right font-mono font-semibold ${isIncrease ? 'text-red-400' : 'text-green-400'}`}>
-                              {diff > 0 ? '+' : ''}{diff.toFixed(2)}
+                            <td className={`px-3 py-2 text-right font-mono font-semibold ${
+                              !hasSolved 
+                                ? 'text-gray-500' 
+                                : exceedsAllowable 
+                                  ? 'text-red-400' 
+                                  : 'text-emerald-400'
+                            }`}>
+                              {hasSolved ? actualQ!.toFixed(2) : '—'}
+                              {hasSolved && !isConverged && (
+                                <span className="ml-1 text-yellow-400" title="Did not converge">*</span>
+                              )}
+                            </td>
+                            {enhancedSolverOutput && (
+                              <>
+                                <td className="px-3 py-2 text-right font-mono text-gray-300">
+                                  {enhancedResult ? enhancedResult.solvedWSE.toFixed(2) : '—'}
+                                </td>
+                                <td className={`px-3 py-2 text-right font-mono ${
+                                  enhancedResult && enhancedResult.freeboardFt < 0.5 
+                                    ? 'text-amber-400' 
+                                    : 'text-gray-400'
+                                }`}>
+                                  {enhancedResult ? enhancedResult.freeboardFt.toFixed(2) : '—'}
+                                </td>
+                              </>
+                            )}
+                            <td className="px-3 py-2 text-center">
+                              {hasSolved ? (
+                                exceedsAllowable ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-red-500/20 text-red-400">
+                                    <XCircle className="w-3 h-3" />
+                                    EXCEEDS
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-400">
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    OK
+                                  </span>
+                                )
+                              ) : (
+                                <span className="text-[10px] text-gray-500">Run Solver</span>
+                              )}
                             </td>
                           </tr>
                         );
