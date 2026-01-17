@@ -32,6 +32,7 @@ export interface DrainageArea {
   cFactor: number;
   tcMinutes: number;
   isIncluded: boolean; // Toggle for inclusion in calculations
+  isBypass: boolean; // Toggle for bypass routing (doesn't go through pond)
   importSource?: DrainageImportSource; // Optional import tracking
 }
 

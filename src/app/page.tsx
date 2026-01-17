@@ -39,12 +39,16 @@ export default function Home() {
       weightedC: number;
       tcMinutes: number;
       flowTotals: Record<ReturnPeriod, number>;
+      bypassFlowTotals: Record<ReturnPeriod, number>;
+      bypassArea: number;
     };
     proposed: {
       totalArea: number;
       weightedC: number;
       tcMinutes: number;
       flowTotals: Record<ReturnPeriod, number>;
+      bypassFlowTotals: Record<ReturnPeriod, number>;
+      bypassArea: number;
     };
   } | null>(null);
   

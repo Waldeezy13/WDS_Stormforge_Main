@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { OutfallStructure, OverlapRegion } from '@/utils/hydraulics';
 
 // --- Outfall Type ---
@@ -133,9 +133,11 @@ export default function OutfallProfileSVG({
   onStyleChange,
   onPlateSizeChange
 }: OutfallProfileProps) {
+  const [showSettings, setShowSettings] = useState(false);
+
   // SVG Dimensions - use viewBox for scaling
   const svgWidth = 280;
-  const svgHeight = 500;
+  const svgHeight = showSettings ? 500 : 420;
   // Increased left padding to ensure tick labels don't overlap with plate
   const padding = { top: 30, bottom: 30, left: 55, right: 30 };
   
@@ -218,54 +220,74 @@ export default function OutfallProfileSVG({
 
   return (
     <div className="h-full bg-card border-l border-border flex flex-col shadow-xl relative">
-        <div className="p-4 border-b border-border bg-muted/10 space-y-3">
-            <h3 className="text-sm font-semibold">Outfall Profile</h3>
-            
-            {/* Outfall Style Selector */}
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">Outfall Type</label>
-              <select 
-                value={outfallStyle}
-                onChange={(e) => onStyleChange(e.target.value as OutfallStyle)}
-                className="w-full bg-background border border-input rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-primary outline-none"
-                title="Select outfall structure type"
-                aria-label="Select outfall structure type"
-              >
-                <option value="orifice_plate">Orifice Plate</option>
-              </select>
-            </div>
-            
-            {/* Plate Size Inputs */}
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">Plate Size (ft)</label>
-              <div className="flex items-center gap-2">
-                <div className="flex flex-col items-center">
-                  <span className="text-[10px] text-muted-foreground mb-0.5">Width</span>
-                  <input 
-                    type="number" 
-                    step="0.5"
-                    value={plateSize.width}
-                    onChange={(e) => onPlateSizeChange({ ...plateSize, width: parseFloat(e.target.value) || 0 })}
-                    className="w-16 bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
-                    placeholder="W"
-                    aria-label="Plate width in feet"
-                  />
-                </div>
-                <span className="text-muted-foreground mt-4">×</span>
-                <div className="flex flex-col items-center">
-                  <span className="text-[10px] text-muted-foreground mb-0.5">Height</span>
-                  <input 
-                    type="number" 
-                    step="0.5"
-                    value={plateSize.height}
-                    onChange={(e) => onPlateSizeChange({ ...plateSize, height: parseFloat(e.target.value) || 0 })}
-                    className="w-16 bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
-                    placeholder="H"
-                    aria-label="Plate height in feet"
-                  />
-                </div>
+        <div className="p-3 border-b border-border bg-muted/10 space-y-2">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold">Outfall Profile</h3>
+                {!showSettings && (
+                  <div className="text-[10px] text-muted-foreground">
+                    Plate {plateSize.width} x {plateSize.height} ft
+                  </div>
+                )}
               </div>
+              <button
+                type="button"
+                onClick={() => setShowSettings(prev => !prev)}
+                className="text-[10px] uppercase tracking-wide text-primary hover:text-primary/80"
+              >
+                {showSettings ? 'Hide' : 'Settings'}
+              </button>
             </div>
+
+            {showSettings && (
+              <>
+                {/* Outfall Style Selector */}
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">Outfall Type</label>
+                  <select 
+                    value={outfallStyle}
+                    onChange={(e) => onStyleChange(e.target.value as OutfallStyle)}
+                    className="w-full bg-background border border-input rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-primary outline-none"
+                    title="Select outfall structure type"
+                    aria-label="Select outfall structure type"
+                  >
+                    <option value="orifice_plate">Orifice Plate</option>
+                  </select>
+                </div>
+                
+                {/* Plate Size Inputs */}
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">Plate Size (ft)</label>
+                  <div className="flex items-center gap-2">
+                    <div className="flex flex-col items-center">
+                      <span className="text-[10px] text-muted-foreground mb-0.5">Width</span>
+                      <input 
+                        type="number" 
+                        step="0.5"
+                        value={plateSize.width}
+                        onChange={(e) => onPlateSizeChange({ ...plateSize, width: parseFloat(e.target.value) || 0 })}
+                        className="w-16 bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                        placeholder="W"
+                        aria-label="Plate width in feet"
+                      />
+                    </div>
+                    <span className="text-muted-foreground mt-4">A-</span>
+                    <div className="flex flex-col items-center">
+                      <span className="text-[10px] text-muted-foreground mb-0.5">Height</span>
+                      <input 
+                        type="number" 
+                        step="0.5"
+                        value={plateSize.height}
+                        onChange={(e) => onPlateSizeChange({ ...plateSize, height: parseFloat(e.target.value) || 0 })}
+                        className="w-16 bg-background border border-input rounded px-2 py-1 text-sm focus:ring-1 focus:ring-primary outline-none text-center"
+                        placeholder="H"
+                        aria-label="Plate height in feet"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
         </div>
         <div className="flex-1 relative overflow-hidden">
             <svg width="100%" height="100%" viewBox={`0 0 ${svgWidth} ${svgHeight}`} preserveAspectRatio="xMidYMid meet">

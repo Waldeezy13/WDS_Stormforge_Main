@@ -438,6 +438,7 @@ export default function DrainageImport({
                       <th className="px-3 py-2 text-left w-8"></th>
                       <th className="px-3 py-2 text-left">Name</th>
                       <th className="px-3 py-2 text-center">Type</th>
+                      <th className="px-3 py-2 text-center">Bypass</th>
                       <th className="px-3 py-2 text-right">Area (ac)</th>
                       <th className="px-3 py-2 text-right">C Factor</th>
                       <th className="px-3 py-2 text-right">Tc (min)</th>
@@ -476,6 +477,13 @@ export default function DrainageImport({
                               <option value="existing" className="bg-slate-800 text-white">Existing</option>
                               <option value="proposed" className="bg-slate-800 text-white">Proposed</option>
                             </select>
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            {row.dto.isBypass ? (
+                              <span className="px-2 py-0.5 bg-amber-500/20 text-amber-400 text-xs rounded border border-amber-500/30">Yes</span>
+                            ) : (
+                              <span className="text-gray-600 text-xs">-</span>
+                            )}
                           </td>
                           <td className="px-3 py-2 text-right font-mono">{row.dto.areaAC.toFixed(2)}</td>
                           <td className="px-3 py-2 text-right font-mono">
@@ -526,6 +534,12 @@ export default function DrainageImport({
                                 <div>
                                   <span className="text-gray-500">DA ID:</span>{' '}
                                   <span className="text-gray-300">{row.dto.daId || '-'}</span>
+                                </div>
+                                <div>
+                                  <span className="text-gray-500">Bypass:</span>{' '}
+                                  <span className={row.dto.isBypass ? "text-amber-400" : "text-gray-300"}>
+                                    {row.dto.isBypass ? "Yes (Direct to Outfall)" : "No (Routes to Pond)"}
+                                  </span>
                                 </div>
                                 {row.dto.notes && (
                                   <div className="col-span-3">

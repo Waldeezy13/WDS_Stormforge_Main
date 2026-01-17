@@ -98,28 +98,35 @@ export default function HydrographChart({
     }
 
     const data = currentHydrograph.data;
-    const times = data.map(d => d.timeMin);
-    const qs = data.flatMap(d => [d.inflowCfs, d.outflowCfs]);
-    const wses = data.map(d => d.wse);
+    const times = data.map(d => d.timeMin).filter(Number.isFinite);
+    const qs = data.flatMap(d => [d.inflowCfs, d.outflowCfs]).filter(Number.isFinite);
+    const wses = data.map(d => d.wse).filter(Number.isFinite);
+    const allowableQ = Number.isFinite(currentHydrograph.allowableQCfs) ? currentHydrograph.allowableQCfs : 0;
 
     return {
-      maxTime: Math.max(...times) * 1.1,
-      maxQ: Math.max(...qs, currentHydrograph.allowableQCfs) * 1.1,
-      minWSE: Math.min(pondInvertElevation, ...wses) - 0.5,
-      maxWSE: Math.max(pondTopElevation, ...wses) + 0.5
+      maxTime: (times.length ? Math.max(...times) : 60) * 1.1,
+      maxQ: (qs.length ? Math.max(...qs, allowableQ) : Math.max(10, allowableQ)) * 1.1,
+      minWSE: (wses.length ? Math.min(pondInvertElevation, ...wses) : pondInvertElevation) - 0.5,
+      maxWSE: (wses.length ? Math.max(pondTopElevation, ...wses) : pondTopElevation) + 0.5
     };
   }, [currentHydrograph, pondInvertElevation, pondTopElevation]);
 
+  const safeMaxTime = Number.isFinite(maxTime) && maxTime > 0 ? maxTime : 1;
+  const safeMaxQ = Number.isFinite(maxQ) && maxQ > 0 ? maxQ : 1;
+  const safeMinWSE = Number.isFinite(minWSE) ? minWSE : pondInvertElevation;
+  const safeMaxWSE = Number.isFinite(maxWSE) ? maxWSE : pondTopElevation;
+  const safeWSERange = safeMaxWSE - safeMinWSE > 0 ? safeMaxWSE - safeMinWSE : 1;
+
   // Convert data to SVG coordinates
   const toSVG_Q = (time: number, q: number) => {
-    const x = padding.left + (time / maxTime) * plotWidth;
-    const y = padding.top + plotHeight - (q / maxQ) * plotHeight;
+    const x = padding.left + (time / safeMaxTime) * plotWidth;
+    const y = padding.top + plotHeight - (q / safeMaxQ) * plotHeight;
     return { x, y };
   };
 
   const toSVG_WSE = (time: number, wse: number) => {
-    const x = padding.left + (time / maxTime) * plotWidth;
-    const normalizedWSE = (wse - minWSE) / (maxWSE - minWSE);
+    const x = padding.left + (time / safeMaxTime) * plotWidth;
+    const normalizedWSE = (wse - safeMinWSE) / safeWSERange;
     const y = padding.top + plotHeight - normalizedWSE * plotHeight;
     return { x, y };
   };

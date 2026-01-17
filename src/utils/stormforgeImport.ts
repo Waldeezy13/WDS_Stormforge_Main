@@ -69,6 +69,7 @@ export interface DrainageAreaExportDto {
 
   // Meta (from WD_Drainage property set)
   excludeFromExport: boolean;
+  isBypass: boolean;
   notes: string;
 }
 
@@ -214,6 +215,7 @@ export function mapDtoToDrainageArea(
     cFactor: Math.round((dto.runoffC ?? 0) * 100) / 100,  // Round to 2 decimal places
     tcMinutes: dto.tcMin ?? 10,
     isIncluded: !dto.excludeFromExport,
+    isBypass: dto.isBypass ?? false, // Default to false if missing
     importSource,
   };
 }
@@ -518,6 +520,7 @@ export function exportToStormforgeJson(
       
       // Meta
       excludeFromExport: !area.isIncluded,
+      isBypass: area.isBypass,
       notes: rawData?.notes ?? area.importSource?.notes ?? '',
     };
 

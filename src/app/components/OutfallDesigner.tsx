@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useMemo, useRef, useCallback } from 'react';
-import { Trash2, Plus, CheckCircle, XCircle, AlertTriangle, ChevronDown, ChevronUp, Droplets, Waves, ArrowDownToLine, GripVertical, Sparkles, Loader2, X, ChevronUp as ChevronUpIcon, ChevronDown as ChevronDownIcon, Layers, Play, AlertCircle, Info, Circle, Square, BarChart3 } from 'lucide-react';
+import React, { useState, useMemo, useRef } from 'react';
+import { Trash2, Plus, CheckCircle, XCircle, AlertTriangle, ChevronDown, ChevronUp, Droplets, Waves, ArrowDownToLine, Sparkles, Loader2, X, ChevronUp as ChevronUpIcon, ChevronDown as ChevronDownIcon, Layers, Play, AlertCircle, Info, Circle, Square, BarChart3 } from 'lucide-react';
 import { OutfallStructure, OutfallStructureType, calculateTotalDischarge, detectOverlaps, solveStructureSize, roundToPrecision, getStructureDischarge } from '@/utils/hydraulics';
 import { getOrificeStackingOffset, getAutoSolveEnabled, setAutoSolveEnabled } from '@/utils/hydraulicsConfig';
 import { ModifiedRationalResult } from '@/utils/rationalMethod';
@@ -130,39 +130,6 @@ export default function OutfallDesigner({
   // Solver state
   const [solvingForStorm, setSolvingForStorm] = useState<string | null>(null);
   const [solverError, setSolverError] = useState<{ storm: string; message: string; isWarning?: boolean; actualFlow?: number } | null>(null);
-  
-  // Resizable sidebar state
-  const [sidebarWidth, setSidebarWidth] = useState(320); // Default 320px (w-80)
-  const isResizing = useRef(false);
-  const sidebarRef = useRef<HTMLDivElement>(null);
-  
-  // Sidebar resize handlers
-  const startResize = useCallback((e: React.MouseEvent) => {
-    isResizing.current = true;
-    e.preventDefault();
-    
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isResizing.current) return;
-      
-      // Calculate new width from right edge of window
-      const newWidth = window.innerWidth - e.clientX;
-      // Clamp between 240px and 600px
-      setSidebarWidth(Math.max(240, Math.min(600, newWidth)));
-    };
-    
-    const handleMouseUp = () => {
-      isResizing.current = false;
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-    document.body.style.cursor = 'ew-resize';
-    document.body.style.userSelect = 'none';
-  }, []);
   
   // Detect overlaps
   const overlaps = useMemo(() => detectOverlaps(structures), [structures]);
@@ -889,7 +856,7 @@ export default function OutfallDesigner({
         </section>
 
         {/* 2. Combined Structure Editor & Calculation Details */}
-        <section className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
+        <section className="bg-card border border-border rounded-lg shadow-sm overflow-visible">
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-border bg-muted/20">
             <h3 className="text-lg font-semibold flex items-center gap-2">
@@ -905,8 +872,9 @@ export default function OutfallDesigner({
           </div>
 
           {/* Structure Table with Integrated Calculations */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
+          <div className="grid xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
               <thead className="bg-muted/50 text-muted-foreground text-xs uppercase">
                 <tr>
                   <th className="p-3 text-left">Stage</th>
@@ -1431,11 +1399,28 @@ export default function OutfallDesigner({
               </tbody>
             </table>
             
-            {structures.length === 0 && (
-              <div className="p-8 text-center text-muted-foreground text-sm">
-                No structures defined. Add a stage to begin.
+              {structures.length === 0 && (
+                <div className="p-8 text-center text-muted-foreground text-sm">
+                  No structures defined. Add a stage to begin.
+                </div>
+              )}
+            </div>
+
+            {/* Attached Profile Preview */}
+            <div className="border-t border-border xl:border-t-0 xl:border-l bg-card/50">
+              <div className="xl:sticky xl:top-4 p-3">
+                <OutfallProfileSVG 
+                  structures={structures} 
+                  pondInvert={pondInvertElevation} 
+                  wseList={wseVisList}
+                  overlaps={overlaps}
+                  outfallStyle={outfallStyle}
+                  plateSize={plateSize}
+                  onStyleChange={setOutfallStyle}
+                  onPlateSizeChange={setPlateSize}
+                />
               </div>
-            )}
+            </div>
           </div>
           
           {/* Expand/Collapse Details Toggle */}
@@ -1568,35 +1553,6 @@ export default function OutfallDesigner({
             </div>
           )}
         </section>
-      </div>
-
-      {/* Right Sidebar - Profile Visualization (Resizable) */}
-      <div 
-        ref={sidebarRef}
-        style={{ width: sidebarWidth }}
-        className="bg-card border-l border-border z-10 hidden xl:flex relative"
-      >
-        {/* Resize Handle */}
-        <div
-          onMouseDown={startResize}
-          className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-primary/20 transition-colors flex items-center justify-center group z-20"
-          title="Drag to resize"
-        >
-          <GripVertical className="w-3 h-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-        </div>
-        
-        <div className="flex-1 pl-2">
-          <OutfallProfileSVG 
-            structures={structures} 
-            pondInvert={pondInvertElevation} 
-            wseList={wseVisList}
-            overlaps={overlaps}
-            outfallStyle={outfallStyle}
-            plateSize={plateSize}
-            onStyleChange={setOutfallStyle}
-            onPlateSizeChange={setPlateSize}
-          />
-        </div>
       </div>
 
       {/* Solver Error/Warning Modal */}

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { Plus, Trash2, Calculator, Table as TableIcon, ArrowRight, Waves, Upload, FileJson } from 'lucide-react';
+import { Plus, Trash2, Calculator, Table as TableIcon, ArrowRight, Waves, Upload, FileJson, GitBranch } from 'lucide-react';
 import { ReturnPeriod } from '@/utils/atlas14';
 import type { DrainageArea } from '@/utils/drainageCalculations';
 import { RationalMethod } from '@/utils/drainageCalculations';
@@ -15,14 +15,16 @@ type DrainageTotals = {
   weightedC: number;
   tcMinutes: number;
   flowTotals: Record<ReturnPeriod, number>;
+  bypassFlowTotals: Record<ReturnPeriod, number>;
+  bypassArea: number;
 };
 
 const DEFAULT_AREAS: DrainageArea[] = [
-  { id: '1', type: 'existing', name: 'Ex. Area 1', areaAcres: 5.0, cFactor: 0.35, tcMinutes: 15, isIncluded: true },
-  { id: '2', type: 'existing', name: 'Ex. Area 2', areaAcres: 2.0, cFactor: 0.40, tcMinutes: 12, isIncluded: true },
-  { id: '3', type: 'proposed', name: 'Prop. Roof', areaAcres: 3.5, cFactor: 0.90, tcMinutes: 10, isIncluded: true },
-  { id: '4', type: 'proposed', name: 'Prop. Pavement', areaAcres: 1.5, cFactor: 0.85, tcMinutes: 10, isIncluded: true },
-  { id: '5', type: 'proposed', name: 'Prop. Landscape', areaAcres: 2.0, cFactor: 0.30, tcMinutes: 20, isIncluded: true },
+  { id: '1', type: 'existing', name: 'Ex. Area 1', areaAcres: 5.0, cFactor: 0.35, tcMinutes: 15, isIncluded: true, isBypass: false },
+  { id: '2', type: 'existing', name: 'Ex. Area 2', areaAcres: 2.0, cFactor: 0.40, tcMinutes: 12, isIncluded: true, isBypass: false },
+  { id: '3', type: 'proposed', name: 'Prop. Roof', areaAcres: 3.5, cFactor: 0.90, tcMinutes: 10, isIncluded: true, isBypass: false },
+  { id: '4', type: 'proposed', name: 'Prop. Pavement', areaAcres: 1.5, cFactor: 0.85, tcMinutes: 10, isIncluded: true, isBypass: false },
+  { id: '5', type: 'proposed', name: 'Prop. Landscape', areaAcres: 2.0, cFactor: 0.30, tcMinutes: 20, isIncluded: true, isBypass: false },
 ];
 
 
@@ -60,7 +62,8 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
       if (!raw) return DEFAULT_AREAS;
       const parsed = JSON.parse(raw) as DrainageArea[];
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        // Migrate old data: add isBypass if missing
+        return parsed.map(a => ({ ...a, isBypass: a.isBypass ?? false }));
       }
       return DEFAULT_AREAS;
     } catch (error) {
@@ -178,7 +181,9 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
 
       tcMinutes: 10,
 
-      isIncluded: true
+      isIncluded: true,
+
+      isBypass: false
 
     }]);
 
@@ -228,25 +233,51 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
 
 
 
+  // Toggle bypass routing
+
+  const toggleBypass = (id: string) => {
+
+    setAreas(areas.map(a => {
+
+       if (a.id === id) return { ...a, isBypass: !(a.isBypass ?? false) };
+
+       return a;
+
+    }));
+
+  };
+
+
+
   // Calculate Totals for a specific type
 
   const calculateTotals = useCallback((type: 'existing' | 'proposed'): DrainageTotals => {
 
-      const typeAreas = areas.filter(a => a.type === type && a.isIncluded); // Only sum included areas
+      // Only sum included, non-bypass areas for pond routing
 
-      const totalArea = typeAreas.reduce((sum, a) => sum + a.areaAcres, 0);
+      const pondAreas = areas.filter(a => a.type === type && a.isIncluded && !(a.isBypass ?? false));
 
-      const weightedC = totalArea > 0 ? typeAreas.reduce((sum, a) => sum + (a.cFactor * a.areaAcres), 0) / totalArea : 0;
-
-      const tcMinutes = typeAreas.reduce((max, a) => Math.max(max, a.tcMinutes), 0);
+      const bypassAreas = areas.filter(a => a.type === type && a.isIncluded && (a.isBypass ?? false));
 
       
+
+      const totalArea = pondAreas.reduce((sum, a) => sum + a.areaAcres, 0);
+
+      const bypassArea = bypassAreas.reduce((sum, a) => sum + a.areaAcres, 0);
+
+      const weightedC = totalArea > 0 ? pondAreas.reduce((sum, a) => sum + (a.cFactor * a.areaAcres), 0) / totalArea : 0;
+
+      const tcMinutes = pondAreas.reduce((max, a) => Math.max(max, a.tcMinutes), 0);
+
+      
+
+      // Flow totals for pond-routed areas
 
       const flowTotals = selectedEvents.reduce((acc, event) => {
 
           acc[event] = results
 
-            .filter(r => r.type === type && r.isIncluded) // Only sum included results
+            .filter(r => r.type === type && r.isIncluded && !(r.isBypass ?? false))
 
             .reduce((sum, r) => sum + r.results[event].peakFlowCfs, 0);
 
@@ -256,7 +287,23 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
 
 
 
-      return { totalArea, weightedC, tcMinutes, flowTotals };
+      // Bypass flow totals
+
+      const bypassFlowTotals = selectedEvents.reduce((acc, event) => {
+
+          acc[event] = results
+
+            .filter(r => r.type === type && r.isIncluded && (r.isBypass ?? false))
+
+            .reduce((sum, r) => sum + r.results[event].peakFlowCfs, 0);
+
+          return acc;
+
+      }, {} as Record<ReturnPeriod, number>);
+
+
+
+      return { totalArea, weightedC, tcMinutes, flowTotals, bypassFlowTotals, bypassArea };
 
   }, [areas, results, selectedEvents]);
 
@@ -337,6 +384,8 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
 
                 <th className="px-4 py-3 border-b border-border min-w-[50px] text-center">Inc.</th>
 
+                <th className="px-4 py-3 border-b border-border min-w-[50px] text-center">Bypass</th>
+
                 <th className="px-4 py-3 border-b border-border min-w-[150px]">Area Name</th>
 
                 <th className="px-4 py-3 border-b border-border text-right min-w-[100px]">Area (ac)</th>
@@ -379,7 +428,7 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
 
               {results.filter(r => r.type === type).map((row) => (
 
-                <tr key={row.id} className={`hover:bg-white/5 transition-colors group ${!row.isIncluded ? 'opacity-50 bg-slate-900/20' : ''}`}>
+                <tr key={row.id} className={`hover:bg-white/5 transition-colors group ${!row.isIncluded ? 'opacity-50 bg-slate-900/20' : (row.isBypass ?? false) ? 'bg-amber-900/20' : ''}`}>
 
                   <td className="px-4 py-2 text-center">
 
@@ -394,6 +443,24 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
                     >
 
                       <Waves className="w-4 h-4" />
+
+                    </button>
+
+                  </td>
+
+                  <td className="px-4 py-2 text-center">
+
+                    <button 
+
+                      onClick={() => toggleBypass(row.id)}
+
+                      className={`transition-colors p-1 rounded-full ${(row.isBypass ?? false) ? 'text-amber-400 hover:text-amber-300 bg-amber-500/20' : 'text-gray-600 hover:text-gray-400 bg-gray-800'}`}
+
+                      title={(row.isBypass ?? false) ? "Bypass: Routes around pond" : "Routes to pond"}
+
+                    >
+
+                      <GitBranch className="w-4 h-4" />
 
                     </button>
 
@@ -539,7 +606,7 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
 
                   <tr>
 
-                    <td colSpan={7 + (selectedEvents.length * 2)} className="px-4 py-8 text-center text-gray-500 text-sm italic">
+                    <td colSpan={8 + (selectedEvents.length * 2)} className="px-4 py-8 text-center text-gray-500 text-sm italic">
 
                       No drainage areas added yet.
 
@@ -554,37 +621,44 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
             
 
             <tfoot className="bg-slate-900/80 border-t-2 border-border font-semibold">
-
                 <tr>
-
-                    <td colSpan={2} className="px-4 py-3 text-right uppercase text-xs text-gray-400">Total {type === 'existing' ? 'Ex.' : 'Prop.'} (Included):</td>
-
+                    <td colSpan={3} className="px-4 py-3 text-right uppercase text-xs text-gray-400">Pond Flow (Included, Non-Bypass):</td>
                     <td className="px-4 py-3 text-right font-mono text-white">{totals.totalArea.toFixed(2)}</td>
-
                     <td className="px-4 py-3 text-right font-mono text-gray-300">{totals.weightedC.toFixed(2)}</td>
-
                     <td className="px-4 py-3 text-center text-gray-500">-</td>
-
                     {selectedEvents.map(event => (
-
                         <React.Fragment key={event}>
-
                             <td className="px-4 py-3 border-l border-border"></td>
-
                             <td className="px-4 py-3 text-right font-mono text-accent text-lg">
-
                                 {(totals.flowTotals[event] ?? 0).toFixed(2)}
-
                             </td>
-
                         </React.Fragment>
-
                     ))}
-
                     <td></td>
-
                 </tr>
-
+                {/* Bypass totals row - only show if there are bypass areas */}
+                {totals.bypassArea > 0 && (
+                  <tr className="bg-amber-900/30">
+                    <td colSpan={3} className="px-4 py-3 text-right uppercase text-xs text-amber-400">
+                      <span className="flex items-center justify-end gap-1">
+                        <GitBranch className="w-3 h-3" />
+                        Bypass Flow:
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono text-amber-300">{totals.bypassArea.toFixed(2)}</td>
+                    <td className="px-4 py-3 text-center text-gray-500">-</td>
+                    <td className="px-4 py-3 text-center text-gray-500">-</td>
+                    {selectedEvents.map(event => (
+                        <React.Fragment key={event}>
+                            <td className="px-4 py-3 border-l border-border"></td>
+                            <td className="px-4 py-3 text-right font-mono text-amber-400 text-lg">
+                                {(totals.bypassFlowTotals[event] ?? 0).toFixed(2)}
+                            </td>
+                        </React.Fragment>
+                    ))}
+                    <td></td>
+                  </tr>
+                )}
             </tfoot>
           </table>
         </div>
@@ -594,70 +668,200 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
 
 
 
-  // Comparison Card
-
-  const renderComparison = () => (
-
-     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-
+  // Comparison Card - Flow Diagram Style
+  const renderComparison = () => {
+    const hasExistingBypass = existingTotals.bypassArea > 0;
+    const hasProposedBypass = proposedTotals.bypassArea > 0;
+    
+    return (
+     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
         {selectedEvents.map(event => {
-
-           const exFlow = existingTotals.flowTotals[event] ?? 0;
-
-           const propFlow = proposedTotals.flowTotals[event] ?? 0;
-
-           const diff = propFlow - exFlow;
-
-           const isIncrease = diff > 0;
-
+           // Existing flows
+           const exPondFlow = existingTotals.flowTotals[event] ?? 0;
+           const exBypassFlow = existingTotals.bypassFlowTotals[event] ?? 0;
+           const exTotalFlow = exPondFlow + exBypassFlow;
            
+           // Proposed flows
+           const propPondFlow = proposedTotals.flowTotals[event] ?? 0;
+           const propBypassFlow = proposedTotals.bypassFlowTotals[event] ?? 0;
+           const propTotalFlow = propPondFlow + propBypassFlow;
+           
+           // Change calculations
+           const diff = propTotalFlow - exTotalFlow;
+           const isIncrease = diff > 0;
+           
+           // Allowable pond release = existing total - proposed bypass
+           const allowablePondRelease = Math.max(0, exTotalFlow - propBypassFlow);
+           
+           // Design Point Target = Allowable Pond Release + Bypass
+           const targetDesignPointFlow = allowablePondRelease + propBypassFlow;
+
+           // Determine states for visualization
+           const exState = hasExistingBypass ? 'split' : 'single';
+           const propState = hasProposedBypass ? 'split' : 'single';
 
            return (
-
-             <div key={event} className="bg-card border border-border p-4 rounded-lg shadow-md">
-
-                <h4 className="text-gray-400 text-xs uppercase font-bold mb-2">{event} Storm Event</h4>
-
-                <div className="flex justify-between items-end mb-2">
-
-                   <div>
-
-                      <div className="text-xs text-gray-500">Existing</div>
-
-                      <div className="font-mono text-lg text-gray-300">{exFlow.toFixed(2)} cfs</div>
-
-                   </div>
-
-                   <ArrowRight className="w-4 h-4 text-gray-600 mb-1.5" />
-
-                   <div className="text-right">
-
-                      <div className="text-xs text-gray-500">Proposed</div>
-
-                      <div className="font-mono text-lg text-white">{propFlow.toFixed(2)} cfs</div>
-
-                   </div>
-
+             <div key={event} className="bg-card border border-border rounded-xl shadow-sm overflow-hidden flex flex-col">
+                {/* Header */}
+                <div className="px-4 py-3 bg-slate-900/50 border-b border-border flex justify-between items-center">
+                  <h4 className="text-gray-200 font-semibold">{event} Storm Event</h4>
+                  <div className={`text-xs font-mono px-2 py-0.5 rounded ${isIncrease ? 'bg-red-500/10 text-red-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
+                    {isIncrease ? '+' : ''}{diff.toFixed(2)} cfs
+                  </div>
                 </div>
+                
+                <div className="p-5 flex-1 flex flex-col justify-center">
+                  {/* 5-Column Grid: [Existing] [Arrow] [Proposed] [Arrow] [DesignPt] */}
+                  <div className="grid grid-cols-[1fr_40px_1fr_40px_1fr] gap-2 items-center">
+                    
+                    {/* HEADERS */}
+                    <div className="text-[10px] uppercase text-gray-500 font-medium text-center mb-2">Existing</div>
+                    <div></div>
+                    <div className="text-[10px] uppercase text-gray-500 font-medium text-center mb-2">Proposed</div>
+                    <div></div>
+                    <div className="text-[10px] uppercase text-gray-500 font-medium text-center mb-2">Design Pt</div>
 
-                <div className={`text-sm font-medium flex items-center gap-1 ${isIncrease ? 'text-red-400' : 'text-green-400'}`}>
+                    {/* COLUMN 1: EXISTING */}
+                    <div className="flex flex-col items-center justify-center gap-6 h-full min-h-[80px]">
+                      {exState === 'single' ? (
+                        <div className="flex flex-col items-center">
+                           <div className="bg-slate-800 border border-slate-700 text-gray-300 px-3 py-1.5 rounded text-lg font-mono font-semibold min-w-[70px] text-center">
+                             {exTotalFlow.toFixed(2)}
+                           </div>
+                           <span className="text-[9px] text-gray-500 mt-1">total</span>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex flex-col items-center">
+                             <div className="bg-slate-800 border border-slate-700 text-gray-300 px-2 py-1 rounded text-sm font-mono min-w-[60px] text-center">
+                               {exPondFlow.toFixed(2)}
+                             </div>
+                             <span className="text-[9px] text-gray-600 mt-0.5">pond area</span>
+                          </div>
+                          <div className="flex flex-col items-center">
+                             <div className="bg-slate-800 border border-slate-700 text-gray-300 px-2 py-1 rounded text-sm font-mono min-w-[60px] text-center">
+                               {exBypassFlow.toFixed(2)}
+                             </div>
+                             <span className="text-[9px] text-gray-600 mt-0.5">bypass area</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
 
-                   {isIncrease ? '+' : ''}{diff.toFixed(2)} cfs
+                    {/* ARROW 1: EX -> PROP */}
+                    <div className="h-full w-full relative">
+                       <svg className="absolute inset-0 w-full h-full overflow-visible" viewBox="0 0 40 100" preserveAspectRatio="none">
+                          {exState === 'single' && propState === 'single' && (
+                            <path d="M 0 50 L 40 50" stroke="#4b5563" strokeWidth="1.5" fill="none" markerEnd="url(#arrowhead)" />
+                          )}
+                          {exState === 'single' && propState === 'split' && (
+                            <>
+                              <path d="M 0 50 C 20 50, 20 20, 40 20" stroke="#4b5563" strokeWidth="1.5" fill="none" />
+                              <path d="M 0 50 C 20 50, 20 80, 40 80" stroke="#4b5563" strokeWidth="1.5" fill="none" />
+                            </>
+                          )}
+                          {exState === 'split' && propState === 'split' && (
+                            <>
+                              <path d="M 0 20 L 40 20" stroke="#4b5563" strokeWidth="1.5" fill="none" />
+                              <path d="M 0 80 L 40 80" stroke="#4b5563" strokeWidth="1.5" fill="none" />
+                            </>
+                          )}
+                          {exState === 'split' && propState === 'single' && (
+                            <>
+                              <path d="M 0 20 C 20 20, 20 50, 40 50" stroke="#4b5563" strokeWidth="1.5" fill="none" />
+                              <path d="M 0 80 C 20 80, 20 50, 40 50" stroke="#4b5563" strokeWidth="1.5" fill="none" />
+                            </>
+                          )}
+                       </svg>
+                    </div>
 
-                   <span className="text-xs font-normal text-gray-500 ml-1">({isIncrease ? 'Increase' : 'Decrease'})</span>
+                    {/* COLUMN 2: PROPOSED */}
+                    <div className="flex flex-col items-center justify-center gap-6 h-full min-h-[80px]">
+                      {propState === 'single' ? (
+                        <div className="flex gap-2 items-center">
+                            <div className="flex flex-col items-center">
+                               <div className="bg-blue-900/20 border border-blue-800/50 text-blue-200 px-2 py-1.5 rounded text-lg font-mono font-semibold min-w-[60px] text-center">
+                                 {propTotalFlow.toFixed(2)}
+                               </div>
+                               <span className="text-[9px] text-blue-500/70 mt-1">pond inflow</span>
+                            </div>
+                            <div className="h-8 w-px bg-gray-700 mx-1"></div>
+                            <div className="flex flex-col items-center">
+                               <div className="bg-emerald-900/20 border border-emerald-800/50 text-emerald-200 px-2 py-1.5 rounded text-lg font-mono font-semibold min-w-[60px] text-center">
+                                 {allowablePondRelease.toFixed(2)}
+                               </div>
+                               <span className="text-[9px] text-emerald-500/70 mt-1">allowable</span>
+                            </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex gap-2 items-center">
+                              <div className="flex flex-col items-center">
+                                 <div className="bg-blue-900/20 border border-blue-800/50 text-blue-200 px-2 py-1 rounded text-sm font-mono min-w-[50px] text-center shadow-[0_0_10px_rgba(59,130,246,0.1)]">
+                                   {propPondFlow.toFixed(2)}
+                                 </div>
+                                 <span className="text-[9px] text-blue-500/70 mt-0.5">pond inflow</span>
+                              </div>
+                              <div className="h-6 w-px bg-gray-700 mx-1"></div>
+                              <div className="flex flex-col items-center">
+                                 <div className="bg-emerald-900/20 border border-emerald-800/50 text-emerald-200 px-2 py-1 rounded text-sm font-mono min-w-[50px] text-center shadow-[0_0_10px_rgba(16,185,129,0.1)]">
+                                   {allowablePondRelease.toFixed(2)}
+                                 </div>
+                                 <span className="text-[9px] text-emerald-500/70 mt-0.5">allowable</span>
+                              </div>
+                          </div>
+                          
+                          <div className="flex flex-col items-center">
+                             <div className="bg-amber-900/20 border border-amber-800/50 text-amber-200 px-2 py-1 rounded text-sm font-mono min-w-[60px] text-center shadow-[0_0_10px_rgba(245,158,11,0.1)]">
+                               {propBypassFlow.toFixed(2)}
+                             </div>
+                             <span className="text-[9px] text-amber-500/70 mt-0.5">bypass flow</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
 
+                    {/* ARROW 2: PROP -> DESIGN PT */}
+                    <div className="h-full w-full relative">
+                       <svg className="absolute inset-0 w-full h-full overflow-visible" viewBox="0 0 40 100" preserveAspectRatio="none">
+                          {propState === 'single' ? (
+                            <path d="M 0 50 L 40 50" stroke="#3b82f6" strokeWidth="2" fill="none" markerEnd="url(#arrowhead-blue)" />
+                          ) : (
+                            <>
+                              <path d="M 0 20 C 20 20, 20 50, 40 50" stroke="#3b82f6" strokeWidth="2" fill="none" />
+                              <path d="M 0 80 C 20 80, 20 50, 40 50" stroke="#f59e0b" strokeWidth="2" strokeDasharray="4,2" fill="none" />
+                            </>
+                          )}
+                          
+                          {/* Definitions for markers */}
+                          <defs>
+                            <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                              <polygon points="0 0, 10 3.5, 0 7" fill="#4b5563" />
+                            </marker>
+                            <marker id="arrowhead-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                              <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6" />
+                            </marker>
+                          </defs>
+                       </svg>
+                    </div>
+
+                    {/* COLUMN 3: DESIGN POINT */}
+                    <div className="flex flex-col items-center justify-center h-full">
+                       <div className="bg-slate-900 border border-primary/30 text-primary px-3 py-2 rounded-lg text-xl font-mono font-bold min-w-[70px] text-center shadow-lg">
+                         {targetDesignPointFlow.toFixed(2)}
+                       </div>
+                       <span className="text-[9px] text-gray-500 mt-1">design pt</span>
+                    </div>
+
+                  </div>
+                  
                 </div>
-
              </div>
-
            );
-
         })}
-
      </div>
-
-  );
-
+    );
+  };
 
 
   return (
@@ -701,8 +905,6 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
       {/* Flow Comparison Summary */}
 
       {renderComparison()}
-
-
 
       {/* Existing Conditions Table */}
 

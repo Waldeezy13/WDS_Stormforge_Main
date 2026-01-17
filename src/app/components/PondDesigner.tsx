@@ -7,7 +7,7 @@ import type { ModifiedRationalResult } from '@/utils/rationalMethod';
 import { ReturnPeriod, InterpolationMethod, getRainfallData } from '@/utils/atlas14';
 import { getIntensityInPerHr } from '@/utils/idf';
 import { ModifiedRationalMethod } from '@/utils/rationalMethod';
-import { Cuboid, Settings2, AlertTriangle, Droplets, TrendingUp, ChevronDown, Calculator, Upload, Plus, Trash2, Table, CheckCircle2, XCircle } from 'lucide-react';
+import { Cuboid, Settings2, AlertTriangle, Droplets, TrendingUp, ChevronDown, Calculator, Upload, Plus, Trash2, Table, CheckCircle2, XCircle, GitBranch } from 'lucide-react';
 import { 
   StageStorageCurve, 
   StageStoragePoint, 
@@ -225,12 +225,16 @@ type DrainageTotalsSummary = {
     weightedC: number;
     tcMinutes: number;
     flowTotals: Record<ReturnPeriod, number>;
+    bypassFlowTotals: Record<ReturnPeriod, number>;
+    bypassArea: number;
   };
   proposed: {
     totalArea: number;
     weightedC: number;
     tcMinutes: number;
     flowTotals: Record<ReturnPeriod, number>;
+    bypassFlowTotals: Record<ReturnPeriod, number>;
+    bypassArea: number;
   };
 } | null;
 
@@ -858,7 +862,13 @@ export default function PondDesigner({
       const next: Record<ReturnPeriod, number> = { ...prev };
       (Object.keys(drainageTotals.existing.flowTotals) as ReturnPeriod[]).forEach((event) => {
         const existingFlow = drainageTotals.existing.flowTotals[event] ?? 0;
-        next[event] = prev[event] === 0 ? existingFlow : prev[event];
+        const existingBypass = drainageTotals.existing.bypassFlowTotals[event] ?? 0;
+        const totalExisting = existingFlow + existingBypass;
+        
+        const proposedBypass = drainageTotals.proposed.bypassFlowTotals[event] ?? 0;
+        const defaultAllowable = Math.max(0, totalExisting - proposedBypass);
+
+        next[event] = prev[event] === 0 ? defaultAllowable : prev[event];
       });
       return next;
     });
@@ -868,17 +878,15 @@ export default function PondDesigner({
     if (!drainageTotals) return;
     setAllowableFlows(() => {
       const next: Record<ReturnPeriod, number> = {
-        '1yr': 0,
-        '2yr': 0,
-        '5yr': 0,
-        '10yr': 0,
-        '25yr': 0,
-        '50yr': 0,
-        '100yr': 0,
-        '500yr': 0,
+        '1yr': 0, '2yr': 0, '5yr': 0, '10yr': 0, '25yr': 0, '50yr': 0, '100yr': 0, '500yr': 0,
       };
       (Object.keys(drainageTotals.existing.flowTotals) as ReturnPeriod[]).forEach((event) => {
-        next[event] = drainageTotals.existing.flowTotals[event] ?? 0;
+        const existingFlow = drainageTotals.existing.flowTotals[event] ?? 0;
+        const existingBypass = drainageTotals.existing.bypassFlowTotals[event] ?? 0;
+        const totalExisting = existingFlow + existingBypass;
+        
+        const proposedBypass = drainageTotals.proposed.bypassFlowTotals[event] ?? 0;
+        next[event] = Math.max(0, totalExisting - proposedBypass);
       });
       return next;
     });
@@ -1110,10 +1118,20 @@ export default function PondDesigner({
                     <thead className="bg-slate-900/60 text-[11px] uppercase text-gray-400 font-medium">
                       <tr>
                         <th className="px-3 py-2">Storm</th>
-                        <th className="px-3 py-2 text-right">Existing Q</th>
-                        <th className="px-3 py-2 text-right">Proposed Q</th>
-                        <th className="px-3 py-2 text-right">Allowable Q</th>
-                        <th className="px-3 py-2 text-right">Actual Q</th>
+                        <th className="px-3 py-2 text-right">Existing Total</th>
+                        {(drainageTotals.proposed.bypassArea ?? 0) > 0 && (
+                          <>
+                            <th className="px-3 py-2 text-right text-amber-400"><span className="flex items-center justify-end gap-1"><GitBranch className="w-3 h-3" />Bypass Q</span></th>
+                          </>
+                        )}
+                        <th className="px-3 py-2 text-right">Pond Inflow Q</th>
+                        <th className="px-3 py-2 text-center">Allowable Pond Outflow</th>
+                        <th className="px-3 py-2 text-right">Pond Release Q</th>
+                        {(drainageTotals.proposed.bypassArea ?? 0) > 0 && (
+                          <>
+                            <th className="px-3 py-2 text-right">Design Pt Total</th>
+                          </>
+                        )}
                         {enhancedSolverOutput && (
                           <>
                             <th className="px-3 py-2 text-right">Solved WSE</th>
@@ -1126,8 +1144,13 @@ export default function PondDesigner({
                     <tbody className="divide-y divide-border bg-card/40">
                       {selectedEvents.map(event => {
                         const existingFlow = drainageTotals.existing.flowTotals[event] ?? 0;
-                        const proposedFlow = drainageTotals.proposed.flowTotals[event] ?? 0;
-                        const allowable = (allowableFlows[event] ?? existingFlow);
+                        const existingBypass = drainageTotals.existing.bypassFlowTotals[event] ?? 0;
+                        const totalExisting = existingFlow + existingBypass;
+
+                        const pondInflow = drainageTotals.proposed.flowTotals[event] ?? 0;
+                        const proposedBypass = drainageTotals.proposed.bypassFlowTotals[event] ?? 0;
+                        
+                        const allowable = (allowableFlows[event] ?? Math.max(0, totalExisting - proposedBypass));
                         
                         // Use enhanced result if available, otherwise fall back to legacy
                         const enhancedResult = enhancedSolverOutput?.results.find(r => r.stormEvent === event);
@@ -1143,9 +1166,15 @@ export default function PondDesigner({
                         return (
                           <tr key={event} className="hover:bg-white/5 transition-colors">
                             <td className="px-3 py-2 font-medium text-gray-200">{event.toUpperCase()}</td>
-                            <td className="px-3 py-2 text-right font-mono text-gray-400">{existingFlow.toFixed(2)}</td>
-                            <td className="px-3 py-2 text-right font-mono text-gray-200">{proposedFlow.toFixed(2)}</td>
-                            <td className="px-3 py-2 text-right">
+                            <td className="px-3 py-2 text-right font-mono text-gray-400">{totalExisting.toFixed(2)}</td>
+                            {/* Bypass Column */}
+                            {(drainageTotals.proposed.bypassArea ?? 0) > 0 && (
+                              <td className="px-3 py-2 text-right font-mono text-amber-400">
+                                {proposedBypass.toFixed(2)}
+                              </td>
+                            )}
+                            <td className="px-3 py-2 text-right font-mono text-gray-200">{pondInflow.toFixed(2)}</td>
+                            <td className="px-3 py-2 text-center">
                               <input
                                 type="number"
                                 step="0.01"
@@ -1157,7 +1186,7 @@ export default function PondDesigner({
                                     [event]: Number.isFinite(value) ? value : 0,
                                   }));
                                 }}
-                                className="w-full max-w-[5rem] bg-background border border-border rounded px-2 py-1 text-xs font-mono text-right focus:ring-1 focus:ring-primary outline-none"
+                                className="w-full max-w-[5rem] bg-background border border-border rounded px-2 py-1 text-xs font-mono text-center focus:ring-1 focus:ring-primary outline-none"
                                 title="Allowable flow rate (cfs)"
                                 aria-label="Allowable flow rate (cfs)"
                               />
@@ -1174,6 +1203,15 @@ export default function PondDesigner({
                                 <span className="ml-1 text-yellow-400" title="Did not converge">*</span>
                               )}
                             </td>
+                            {/* Design Point Total column */}
+                            {(drainageTotals.proposed.bypassArea ?? 0) > 0 && (() => {
+                              const designPtTotal = (actualQ ?? 0) + proposedBypass;
+                              return (
+                                <td className="px-3 py-2 text-right font-mono font-semibold text-white">
+                                  {hasSolved ? designPtTotal.toFixed(2) : '—'}
+                                </td>
+                              );
+                            })()}
                             {enhancedSolverOutput && (
                               <>
                                 <td className="px-3 py-2 text-right font-mono text-gray-300">
