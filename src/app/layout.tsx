@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "WDS Stormforge",
+  title: "StormForge",
   description: "Professional Civil Engineering Pond Design Tool",
 };
 
