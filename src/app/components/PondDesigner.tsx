@@ -827,7 +827,6 @@ export default function PondDesigner({
 }: PondDesignerProps) {
   const [calculationMethod, setCalculationMethod] = useState<CalculationMethod>('modified-rational');
   const [iterationFrequency, setIterationFrequency] = useState<number>(1);
-  const [csvPasteText, setCsvPasteText] = useState('');
   const [selectedCsvFileName, setSelectedCsvFileName] = useState<string | null>(null);
   const [tableErrors, setTableErrors] = useState<string[]>([]);
   const csvFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -915,47 +914,42 @@ export default function PondDesigner({
     return pondInvertElevation + depth;
   };
 
-  // Handle CSV paste for stage-storage table
-  const handleCsvPaste = () => {
-    if (!csvPasteText.trim()) return;
-    
-    const { points, errors } = parseStageStorageCSV(csvPasteText);
-    
-    if (errors.length > 0) {
-      setTableErrors(errors);
-      return;
-    }
-    
-    if (points.length < 2) {
-      setTableErrors(['At least 2 data points are required']);
-      return;
-    }
-    
-    const validationErrors = validateStageStorageCurve(points);
-    if (validationErrors.length > 0) {
-      setTableErrors(validationErrors.map(e => `Row ${e.row + 1}: ${e.message}`));
-      return;
-    }
-    
-    setTableErrors([]);
-    const newCurve: StageStorageCurve = {
-      name: stageStorageCurve?.name || 'Imported Pond',
-      invertElevation: points[0]?.elevation ?? pondInvertElevation,
-      points
-    };
-    onStageStorageCurveChange(newCurve);
-    setCsvPasteText('');
-  };
-
   const handleCsvFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
     try {
       const text = await file.text();
-      setCsvPasteText(text);
-      setSelectedCsvFileName(file.name);
+      const { points, errors } = parseStageStorageCSV(text);
+
+      if (errors.length > 0) {
+        setTableErrors(errors);
+        setSelectedCsvFileName(null);
+        return;
+      }
+
+      if (points.length < 2) {
+        setTableErrors(['At least 2 data points are required']);
+        setSelectedCsvFileName(null);
+        return;
+      }
+
+      const validationErrors = validateStageStorageCurve(points);
+      if (validationErrors.length > 0) {
+        setTableErrors(validationErrors.map(e => `Row ${e.row + 1}: ${e.message}`));
+        setSelectedCsvFileName(null);
+        return;
+      }
+
+      const newCurve: StageStorageCurve = {
+        name: stageStorageCurve?.name || 'Imported Pond',
+        invertElevation: points[0]?.elevation ?? pondInvertElevation,
+        points,
+      };
+
+      onStageStorageCurveChange(newCurve);
       setTableErrors([]);
+      setSelectedCsvFileName(file.name);
     } catch {
       setTableErrors(['Failed to read CSV file. Please try again.']);
       setSelectedCsvFileName(null);
@@ -1452,10 +1446,10 @@ export default function PondDesigner({
               />
             </div>
 
-            {/* CSV Paste Area */}
+            {/* CSV Import */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <label className="text-xs text-gray-400">Paste CSV Data</label>
+                <label className="text-xs text-gray-400">Import CSV Data</label>
                 <span className="text-[10px] text-gray-500">elevation, volume, area, perimeter</span>
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -1484,32 +1478,11 @@ export default function PondDesigner({
                   Download Template
                 </a>
               </div>
-              <textarea
-                value={csvPasteText}
-                onChange={(e) => {
-                  setCsvPasteText(e.target.value);
-                  if (!e.target.value.trim()) {
-                    setSelectedCsvFileName(null);
-                  }
-                }}
-                placeholder="Paste CSV data here (comma or tab separated)..."
-                title="Paste stage-storage CSV data"
-                aria-label="Paste stage-storage CSV data"
-                className="w-full h-20 bg-background border border-border rounded px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-primary outline-none resize-none"
-              />
               {selectedCsvFileName && (
                 <p className="text-[11px] text-emerald-300">
-                  Loaded file: <span className="font-mono">{selectedCsvFileName}</span>
+                  Imported file: <span className="font-mono">{selectedCsvFileName}</span>
                 </p>
               )}
-              <button
-                onClick={handleCsvPaste}
-                disabled={!csvPasteText.trim()}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-primary/20 hover:bg-primary/30 text-primary rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Upload className="w-4 h-4" />
-                Import CSV Data
-              </button>
             </div>
 
             {/* Validation Errors */}
@@ -1661,7 +1634,13 @@ export default function PondDesigner({
             <color attach="background" args={['#020617']} />
             <ambientLight intensity={0.5} />
             <pointLight position={[100, 100, 100]} intensity={1} />
-            <Grid infiniteGrid fadeDistance={500} sectionColor="#1e293b" cellColor="#0f172a" />
+            <Grid
+              position={[0, -0.05, 0]}
+              infiniteGrid
+              fadeDistance={500}
+              sectionColor="#1e293b"
+              cellColor="#0f172a"
+            />
             
             <PondMesh 
               width={pondMode === 'custom' && stageStorageCurve 
@@ -1678,6 +1657,7 @@ export default function PondDesigner({
                 color: getColor(r.stormEvent),
                 label: r.stormEvent.toUpperCase()
               }))}
+              stageStorageCurve={pondMode === 'custom' ? stageStorageCurve : null}
             />
             
             <OrbitControls 

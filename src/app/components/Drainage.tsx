@@ -94,9 +94,9 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
     }
     try {
       const raw = window.localStorage.getItem('wds-stormforge-drainage-areas');
-      if (!raw) return DEFAULT_AREAS;
+      if (raw === null) return DEFAULT_AREAS;
       const parsed = JSON.parse(raw) as DrainageArea[];
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      if (Array.isArray(parsed)) {
         // Migrate old data: add isBypass if missing
         return parsed.map(a => ({ ...a, isBypass: a.isBypass ?? false }));
       }
