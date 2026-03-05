@@ -6,7 +6,19 @@ import { ReturnPeriod } from '@/utils/atlas14';
 import type { DrainageArea } from '@/utils/drainageCalculations';
 import { RationalMethod } from '@/utils/drainageCalculations';
 import DrainageImport from './DrainageImport';
-import { getImportMetadata, DrainageImportInfo } from '@/utils/stormforgeImport';
+import { getImportMetadata, DrainageImportInfo } from '@/utils/stormforgeImport'
+
+type AreaToggles = {
+  isIncluded: boolean;
+  isBypass: boolean;
+};
+
+export type DesignPointConfig = {
+  id: string;
+  name: string;
+  note: string;
+  toggles: Record<string, AreaToggles>;
+};;
 
 
 
@@ -53,6 +65,29 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
     return getImportMetadata();
   });
 
+  const [designPoints, setDesignPoints] = useState<DesignPointConfig[]>(() => {
+    if (typeof window === 'undefined') return [{ id: 'dp-1', name: 'Design Point 1', note: '', toggles: {} }];
+    try {
+      const raw = window.localStorage.getItem('wds-stormforge-design-points');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch(e) {}
+    return [{ id: 'dp-1', name: 'Design Point 1', note: '', toggles: {} }];
+  });
+  
+  const [activeDpId, setActiveDpId] = useState<string>(() => {
+    if (typeof window === 'undefined') return 'dp-1';
+    try {
+       const saved = window.localStorage.getItem('wds-stormforge-active-dp');
+       if (saved) return saved;
+    } catch(e) {}
+    return 'dp-1';
+  });
+
+  const activeDp = useMemo(() => designPoints.find(dp => dp.id === activeDpId) || designPoints[0], [designPoints, activeDpId]);
+
   const [areas, setAreas] = useState<DrainageArea[]>(() => {
     if (typeof window === 'undefined') {
       return DEFAULT_AREAS;
@@ -73,6 +108,23 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
   });
 
 
+
+  const activeAreas = useMemo(() => {
+    return areas.map(a => {
+      const toggle = activeDp?.toggles[a.id];
+      if (toggle) {
+        return { ...a, isIncluded: toggle.isIncluded, isBypass: toggle.isBypass };
+      }
+      return a;
+    });
+  }, [areas, activeDp]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('wds-stormforge-design-points', JSON.stringify(designPoints));
+      window.localStorage.setItem('wds-stormforge-active-dp', activeDpId);
+    }
+  }, [designPoints, activeDpId]);
 
   // Autosave areas whenever they change
 
@@ -217,37 +269,98 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
 
 
 
-  // Toggle inclusion
+  const addDesignPoint = () => {
+    const existingNumbers = designPoints
+      .map(dp => {
+        const match = dp.name.match(/^Design Point (\d+)$/i);
+        return match ? parseInt(match[1], 10) : 0;
+      })
+      .filter(n => !isNaN(n));
+      
+    const maxNum = existingNumbers.length > 0 ? Math.max(...existingNumbers) : 0;
+    const nextNum = maxNum + 1;
+
+    const newDp = {
+       id: crypto.randomUUID(),
+       name: `Design Point ${nextNum}`,
+       note: '',
+       toggles: {}
+    };
+    setDesignPoints([...designPoints, newDp]);
+    setActiveDpId(newDp.id);
+  };
+
+  const updateDpNote = (id: string, note: string) => {
+    setDesignPoints(prev => prev.map(dp => dp.id === id ? { ...dp, note } : dp));
+  };
 
   const toggleInclusion = (id: string) => {
+    const area = activeAreas.find(a => a.id === id);
+    if (!area) return;
+    const currentIncluded = area.isIncluded;
 
-    setAreas(areas.map(a => {
-
-       if (a.id === id) return { ...a, isIncluded: !a.isIncluded };
-
-       return a;
-
+    setDesignPoints(prev => prev.map(dp => {
+      if (dp.id !== activeDpId) return dp;
+      return {
+        ...dp,
+        toggles: {
+          ...dp.toggles,
+          [id]: {
+            ...dp.toggles[id],
+            isIncluded: !currentIncluded,
+            isBypass: dp.toggles[id]?.isBypass ?? area.isBypass ?? false
+          }
+        }
+      };
     }));
-
   };
-
-
-
-  // Toggle bypass routing
 
   const toggleBypass = (id: string) => {
+    const area = activeAreas.find(a => a.id === id);
+    if (!area) return;
+    const currentBypass = area.isBypass ?? false;
 
-    setAreas(areas.map(a => {
-
-       if (a.id === id) return { ...a, isBypass: !(a.isBypass ?? false) };
-
-       return a;
-
+    setDesignPoints(prev => prev.map(dp => {
+      if (dp.id !== activeDpId) return dp;
+      return {
+        ...dp,
+        toggles: {
+          ...dp.toggles,
+          [id]: {
+            ...dp.toggles[id],
+            isIncluded: dp.toggles[id]?.isIncluded ?? area.isIncluded,
+            isBypass: !currentBypass
+          }
+        }
+      };
     }));
-
   };
 
 
+
+  const activeResults = useMemo(() => {
+      const mapped = results.map(r => {
+           const activeState = activeAreas.find(a => a.id === r.id);
+           if (activeState) {
+                return { ...r, isIncluded: activeState.isIncluded, isBypass: activeState.isBypass };
+           }
+           return r;
+      });
+
+      // Sort areas to naturally group active/bypass/excluded rows
+      return mapped.sort((a, b) => {
+         // Group 1: Included
+         if (a.isIncluded !== b.isIncluded) {
+            return a.isIncluded ? -1 : 1;
+         }
+         // Group 2: Not Bypass (Routed)
+         if (a.isIncluded && (a.isBypass !== b.isBypass)) {
+            return a.isBypass ? 1 : -1;
+         }
+         // Tie-breaker: Preserve numerical ID order
+         return parseInt(a.id) - parseInt(b.id);
+      });
+  }, [results, activeAreas]);
 
   // Calculate Totals for a specific type
 
@@ -305,7 +418,7 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
 
       return { totalArea, weightedC, tcMinutes, flowTotals, bypassFlowTotals, bypassArea };
 
-  }, [areas, results, selectedEvents]);
+  }, [activeAreas, results, selectedEvents]);
 
 
 
@@ -426,9 +539,9 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
 
             <tbody className="divide-y divide-border">
 
-              {results.filter(r => r.type === type).map((row) => (
+              {activeResults.filter(r => r.type === type).map((row) => (
 
-                <tr key={row.id} className={`hover:bg-white/5 transition-colors group ${!row.isIncluded ? 'opacity-50 bg-slate-900/20' : (row.isBypass ?? false) ? 'bg-amber-900/20' : ''}`}>
+                <tr key={row.id} className={`hover:bg-white/5 transition-colors group ${!row.isIncluded ? 'opacity-50 bg-slate-900/20' : (row.isBypass ?? false) ? 'bg-stone-900/40' : ''}`}>
 
                   <td className="px-4 py-2 text-center">
 
@@ -602,7 +715,7 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
 
                {/* Empty State for Section */}
 
-               {results.filter(r => r.type === type).length === 0 && (
+               {activeResults.filter(r => r.type === type).length === 0 && (
 
                   <tr>
 
@@ -638,7 +751,7 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
                 </tr>
                 {/* Bypass totals row - only show if there are bypass areas */}
                 {totals.bypassArea > 0 && (
-                  <tr className="bg-amber-900/30">
+                  <tr className="bg-stone-900/40">
                     <td colSpan={3} className="px-4 py-3 text-right uppercase text-xs text-amber-400">
                       <span className="flex items-center justify-end gap-1">
                         <GitBranch className="w-3 h-3" />
@@ -812,7 +925,7 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
                           </div>
                           
                           <div className="flex flex-col items-center">
-                             <div className="bg-amber-900/20 border border-amber-800/50 text-amber-200 px-2 py-1 rounded text-sm font-mono min-w-[60px] text-center shadow-[0_0_10px_rgba(245,158,11,0.1)]">
+                             <div className="bg-stone-900/40 border border-amber-800/50 text-amber-200 px-2 py-1 rounded text-sm font-mono min-w-[60px] text-center shadow-[0_0_10px_rgba(245,158,11,0.1)]">
                                {propBypassFlow.toFixed(2)}
                              </div>
                              <span className="text-[9px] text-amber-500/70 mt-0.5">bypass flow</span>
@@ -902,6 +1015,70 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
 
 
 
+              {/* Design Point Tabs */}
+        <div className="flex items-end pl-4 -mb-[1px] relative z-10 flex-wrap gap-1 mt-2">
+           {designPoints.map((dp) => {
+              const isActive = dp.id === activeDpId;
+              return (
+                    <button
+                       key={dp.id}
+                       onClick={() => setActiveDpId(dp.id)}
+                       onDoubleClick={() => {
+                           const newName = window.prompt('Enter a new name for this Design Point:', dp.name);
+                           if (newName && newName.trim()) {
+                               setDesignPoints(prev => prev.map(d => d.id === dp.id ? { ...d, name: newName.trim() } : d));     
+                           }
+                       }}
+                       title="Double-click to rename"
+                       className={`
+                         relative px-6 pt-3 text-sm font-medium transition-all duration-200 outline-none
+                         border select-none border-b-0 rounded-t-[14px] flex items-center justify-center min-w-[140px]
+                         ${isActive 
+                           ? 'bg-slate-900 border-slate-700/80 text-primary z-20 pb-[13px] shadow-[0_-4px_10px_rgba(0,0,0,0.1)]' 
+                           : 'bg-slate-800/80 border-slate-700/50 text-slate-400 hover:bg-slate-800 hover:text-slate-200 z-10 mt-1 pb-2 shadow-[inset_0_-10px_10px_rgba(0,0,0,0.1)]'
+                         }
+                       `}
+                    >
+                       <span>{dp.name}</span>
+                    </button>
+              )
+           })}
+           
+           <div className="ml-1 mb-2 relative z-0">
+               <button onClick={addDesignPoint} className="p-2 text-slate-400 hover:text-primary bg-slate-800/80 shadow-sm border border-slate-700/50 hover:bg-slate-800 hover:border-slate-600 rounded-lg transition-all" title="Add Design Point">
+                  <Plus className="w-5 h-5" />
+               </button>
+           </div>
+        </div>
+
+       {/* Main Container Panel */}
+       <div className="bg-slate-900 border border-slate-700/80 rounded-b-xl rounded-tr-xl p-6 relative z-0 flex flex-col gap-6 shadow-2xl mb-8">
+
+           {/* Active DP Note */}
+           <div className="flex justify-between items-start gap-4">
+               <div className="flex-1 max-w-2xl bg-slate-950/50 rounded-lg border border-slate-800 p-2.5 flex gap-2">
+                  <input
+                     value={activeDp?.note || ''}
+                     onChange={(e) => updateDpNote(activeDpId, e.target.value)}
+                     placeholder="Add a note or description for this design point..."
+                     className="w-full bg-transparent border-none text-slate-300 text-sm outline-none placeholder:text-slate-600 px-2"
+                  />
+               </div>
+               <button 
+                 onClick={() => {
+                    if(designPoints.length > 1 && window.confirm('Delete this Design Point?')) {
+                        const newDps = designPoints.filter(d => d.id !== activeDpId);
+                        setDesignPoints(newDps);
+                        setActiveDpId(newDps[0].id);
+                    }
+                 }}
+                 className={`p-2.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-400/10 transition-colors border border-transparent hover:border-red-400/20 ${designPoints.length <= 1 ? 'opacity-0 pointer-events-none' : ''}`}
+                 title="Delete Design Point"
+               >
+                 <Trash2 className="w-4 h-4" />
+               </button>
+           </div>
+
       {/* Flow Comparison Summary */}
 
       {renderComparison()}
@@ -915,6 +1092,8 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
       {/* Proposed Conditions Table */}
 
       {renderSection('Proposed Drainage Areas', 'proposed', proposedTotals)}
+      
+      </div>
       
     </div>
   );

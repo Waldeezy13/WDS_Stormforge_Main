@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useMemo, useRef } from 'react';
-import { Trash2, Plus, CheckCircle, XCircle, AlertTriangle, ChevronDown, ChevronUp, Droplets, Waves, ArrowDownToLine, Sparkles, Loader2, X, ChevronUp as ChevronUpIcon, ChevronDown as ChevronDownIcon, Layers, Play, AlertCircle, Info, Circle, Square, BarChart3 } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Trash2, Plus, CheckCircle, XCircle, AlertTriangle, ChevronDown, ChevronUp, Droplets, Waves, ArrowDownToLine, Sparkles, Loader2, X, ChevronUp as ChevronUpIcon, ChevronDown as ChevronDownIcon, Layers, Play, AlertCircle, Info, BarChart3 } from 'lucide-react';
 import { OutfallStructure, OutfallStructureType, calculateTotalDischarge, detectOverlaps, solveStructureSize, roundToPrecision, getStructureDischarge } from '@/utils/hydraulics';
 import { getOrificeStackingOffset, getAutoSolveEnabled, setAutoSolveEnabled } from '@/utils/hydraulicsConfig';
 import { ModifiedRationalResult } from '@/utils/rationalMethod';
@@ -365,42 +365,40 @@ export default function OutfallDesigner({
   ];
 
   // Prepare Rating Curve chart data
-  const ratingCurveStormData = useMemo(() => {
-    return summaryData.map(d => ({
-      stormEvent: d.res.stormEvent,
-      allowableQCfs: d.res.allowableReleaseRateCfs,
-      designHeadFt: d.wse - pondInvertElevation,
-      actualQCfs: d.totalDischarge,
-      wse: d.wse
-    }));
-  }, [summaryData, pondInvertElevation]);
+  const ratingCurveStormData = summaryData.map(d => ({
+    stormEvent: d.res.stormEvent,
+    allowableQCfs: d.res.allowableReleaseRateCfs,
+    designHeadFt: d.wse - pondInvertElevation,
+    actualQCfs: d.totalDischarge,
+    wse: d.wse
+  }));
 
   // Prepare Hydrograph data
-  const hydrographData = useMemo<StormHydrograph[]>(() => {
-    if (structures.length === 0) return [];
-    
-    // Create a rating curve function for outflow calculation
-    const outflowRatingCurve = (wse: number): number => {
-      const { totalDischarge } = calculateTotalDischarge(structures, wse, undefined);
-      return totalDischarge;
-    };
-    
-    return summaryData.map(d => {
-      // Get time of concentration from the result (or default to 15 min)
-      const tcMinutes = d.res.criticalDurationMinutes || 15;
-      
-      return generateSyntheticHydrograph(
-        d.res.stormEvent,
-        tcMinutes,
-        d.res.peakInflowCfs,
-        d.res.allowableReleaseRateCfs,
-        d.res.requiredStorageCf,
-        pondInvertElevation,
-        pondAreaSqFt,
-        outflowRatingCurve
-      );
-    });
-  }, [summaryData, structures, pondInvertElevation, pondAreaSqFt]);
+  const hydrographData: StormHydrograph[] = structures.length === 0
+    ? []
+    : (() => {
+        // Create a rating curve function for outflow calculation
+        const outflowRatingCurve = (wse: number): number => {
+          const { totalDischarge } = calculateTotalDischarge(structures, wse, undefined);
+          return totalDischarge;
+        };
+
+        return summaryData.map(d => {
+          // Get time of concentration from the result (or default to 15 min)
+          const tcMinutes = d.res.criticalDurationMinutes || 15;
+
+          return generateSyntheticHydrograph(
+            d.res.stormEvent,
+            tcMinutes,
+            d.res.peakInflowCfs,
+            d.res.allowableReleaseRateCfs,
+            d.res.requiredStorageCf,
+            pondInvertElevation,
+            pondAreaSqFt,
+            outflowRatingCurve
+          );
+        });
+      })();
 
   return (
     <div className="h-full flex bg-slate-50/50 dark:bg-slate-900/50 overflow-hidden">

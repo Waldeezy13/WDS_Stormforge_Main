@@ -1,13 +1,13 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Grid } from '@react-three/drei';
 import type { ModifiedRationalResult } from '@/utils/rationalMethod';
 import { ReturnPeriod, InterpolationMethod, getRainfallData } from '@/utils/atlas14';
 import { getIntensityInPerHr } from '@/utils/idf';
 import { ModifiedRationalMethod } from '@/utils/rationalMethod';
-import { Cuboid, Settings2, AlertTriangle, Droplets, TrendingUp, ChevronDown, Calculator, Upload, Plus, Trash2, Table, CheckCircle2, XCircle, GitBranch } from 'lucide-react';
+import { Cuboid, Settings2, AlertTriangle, Droplets, TrendingUp, ChevronDown, Calculator, Upload, Plus, Trash2, Table, CheckCircle2, XCircle, GitBranch, Download } from 'lucide-react';
 import { 
   StageStorageCurve, 
   StageStoragePoint, 
@@ -828,7 +828,9 @@ export default function PondDesigner({
   const [calculationMethod, setCalculationMethod] = useState<CalculationMethod>('modified-rational');
   const [iterationFrequency, setIterationFrequency] = useState<number>(1);
   const [csvPasteText, setCsvPasteText] = useState('');
+  const [selectedCsvFileName, setSelectedCsvFileName] = useState<string | null>(null);
   const [tableErrors, setTableErrors] = useState<string[]>([]);
+  const csvFileInputRef = useRef<HTMLInputElement | null>(null);
   const [allowableFlows, setAllowableFlows] = useState<Record<ReturnPeriod, number>>({
     '1yr': 0,
     '2yr': 0,
@@ -943,6 +945,26 @@ export default function PondDesigner({
     };
     onStageStorageCurveChange(newCurve);
     setCsvPasteText('');
+  };
+
+  const handleCsvFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      setCsvPasteText(text);
+      setSelectedCsvFileName(file.name);
+      setTableErrors([]);
+    } catch {
+      setTableErrors(['Failed to read CSV file. Please try again.']);
+      setSelectedCsvFileName(null);
+    } finally {
+      // Reset input value so selecting the same file again still triggers onChange.
+      if (csvFileInputRef.current) {
+        csvFileInputRef.current.value = '';
+      }
+    }
   };
 
   // Add a new row to stage-storage table
@@ -1436,14 +1458,50 @@ export default function PondDesigner({
                 <label className="text-xs text-gray-400">Paste CSV Data</label>
                 <span className="text-[10px] text-gray-500">elevation, volume, area, perimeter</span>
               </div>
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  ref={csvFileInputRef}
+                  type="file"
+                  accept=".csv,.txt"
+                  onChange={handleCsvFileSelect}
+                  className="hidden"
+                  aria-label="Select stage-storage CSV file"
+                />
+                <button
+                  type="button"
+                  onClick={() => csvFileInputRef.current?.click()}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-slate-800/70 hover:bg-slate-700 text-gray-200 rounded text-sm font-medium transition-colors"
+                >
+                  <Upload className="w-4 h-4" />
+                  Choose CSV File
+                </button>
+                <a
+                  href="/templates/stage-storage-template.csv"
+                  download
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-slate-800/70 hover:bg-slate-700 text-gray-200 rounded text-sm font-medium transition-colors"
+                >
+                  <Download className="w-4 h-4" />
+                  Download Template
+                </a>
+              </div>
               <textarea
                 value={csvPasteText}
-                onChange={(e) => setCsvPasteText(e.target.value)}
+                onChange={(e) => {
+                  setCsvPasteText(e.target.value);
+                  if (!e.target.value.trim()) {
+                    setSelectedCsvFileName(null);
+                  }
+                }}
                 placeholder="Paste CSV data here (comma or tab separated)..."
                 title="Paste stage-storage CSV data"
                 aria-label="Paste stage-storage CSV data"
                 className="w-full h-20 bg-background border border-border rounded px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-primary outline-none resize-none"
               />
+              {selectedCsvFileName && (
+                <p className="text-[11px] text-emerald-300">
+                  Loaded file: <span className="font-mono">{selectedCsvFileName}</span>
+                </p>
+              )}
               <button
                 onClick={handleCsvPaste}
                 disabled={!csvPasteText.trim()}

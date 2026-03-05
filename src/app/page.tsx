@@ -373,7 +373,21 @@ export default function Home() {
       try {
         const calculatedResults = await Promise.all(
           selectedEvents.map(p => 
-            ModifiedRationalMethod.calculateStorage(preDev, postDev, p, cityId, interpolationMethod)
+            ModifiedRationalMethod.calculateStorage(
+              preDev,
+              postDev,
+              p,
+              cityId,
+              interpolationMethod,
+              drainageTotals
+                ? Math.max(
+                    0,
+                    (drainageTotals.existing.flowTotals[p] ?? 0) +
+                      (drainageTotals.existing.bypassFlowTotals[p] ?? 0) -
+                      (drainageTotals.proposed.bypassFlowTotals[p] ?? 0)
+                  )
+                : undefined
+            )
           )
         );
         setPondResults(calculatedResults);
@@ -386,7 +400,7 @@ export default function Home() {
     }
 
     calculateResults();
-  }, [cityId, selectedEvents, preDev, postDev, interpolationMethod]);
+  }, [cityId, selectedEvents, preDev, postDev, interpolationMethod, drainageTotals]);
 
   // Mark solver as needing rerun when pond dims or mode change
   useEffect(() => {

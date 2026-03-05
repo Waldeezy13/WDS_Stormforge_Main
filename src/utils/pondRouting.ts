@@ -1327,7 +1327,7 @@ function verifyAndShrinkLoop(
   });
   
   // Make a mutable copy of structures
-  let currentStructures = structures.map(s => ({ ...s }));
+  const currentStructures = structures.map(s => ({ ...s }));
   let iterations = 0;
   let converged = false;
   const violations: { stormEvent: ReturnPeriod; allowableQ: number; actualQ: number; excess: number }[] = [];
@@ -1479,7 +1479,7 @@ function verifyAndShrinkLoopLegacy(
     }
   });
   
-  let currentStructures = structures.map(s => ({ ...s }));
+  const currentStructures = structures.map(s => ({ ...s }));
   let iterations = 0;
   let converged = false;
   const violations: { stormEvent: ReturnPeriod; allowableQ: number; actualQ: number; excess: number }[] = [];

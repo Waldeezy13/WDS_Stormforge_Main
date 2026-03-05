@@ -1,0 +1,7 @@
+city,state,duration_minutes,return_period,intensity,source
+Frisco,TX,5,2yr,6.12,NOAA Atlas 14
+Frisco,TX,5,10yr,8.90,NOAA Atlas 14
+Frisco,TX,15,2yr,4.31,NOAA Atlas 14
+Frisco,TX,15,10yr,6.42,NOAA Atlas 14
+Frisco,TX,60,2yr,2.18,NOAA Atlas 14
+Frisco,TX,60,10yr,3.14,NOAA Atlas 14

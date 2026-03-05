@@ -29,19 +29,23 @@ export async function GET(
       intensity_in_per_hr: number;
     }>;
 
+    const createEmptyIntensities = (): Record<ReturnPeriod, number> => ({
+      '1yr': 0,
+      '2yr': 0,
+      '5yr': 0,
+      '10yr': 0,
+      '25yr': 0,
+      '50yr': 0,
+      '100yr': 0,
+      '500yr': 0,
+    });
+
     // Group by duration and build RainfallData array
     const dataMap = new Map<number, Record<ReturnPeriod, number>>();
     
     for (const row of rows) {
       if (!dataMap.has(row.duration_minutes)) {
-        dataMap.set(row.duration_minutes, {
-          '2yr': 0,
-          '5yr': 0,
-          '10yr': 0,
-          '25yr': 0,
-          '50yr': 0,
-          '100yr': 0,
-        } as Record<ReturnPeriod, number>);
+        dataMap.set(row.duration_minutes, createEmptyIntensities());
       }
       const intensities = dataMap.get(row.duration_minutes)!;
       intensities[row.return_period as ReturnPeriod] = row.intensity_in_per_hr;
@@ -58,14 +62,7 @@ export async function GET(
     const uniqueDurations = Array.from(new Set([...allDurations, ...standardDurations])).sort((a, b) => a - b);
     
     const rainfallData: RainfallData[] = uniqueDurations.map(durationMinutes => {
-      const intensities = dataMap.get(durationMinutes) || {
-        '2yr': 0,
-        '5yr': 0,
-        '10yr': 0,
-        '25yr': 0,
-        '50yr': 0,
-        '100yr': 0,
-      } as Record<ReturnPeriod, number>;
+      const intensities = dataMap.get(durationMinutes) || createEmptyIntensities();
       
       // Ensure all return periods are present (fill with 0 if missing)
       for (const rp of standardReturnPeriods) {

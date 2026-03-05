@@ -41,12 +41,15 @@ export class ModifiedRationalMethod {
     postDev: SiteParams,
     returnPeriod: ReturnPeriod,
     cityId: number,
-    interpolationMethod: 'linear' | 'log-log' = 'log-log'
+    interpolationMethod: 'linear' | 'log-log' = 'log-log',
+    allowableReleaseRateCfsOverride?: number
   ): Promise<ModifiedRationalResult> {
     // 1. Calculate Allowable Release Rate (Q_pre)
     // Q_pre is calculated at the Pre-Dev Time of Concentration
     const iPre = await getIntensity(preDev.tcMinutes, returnPeriod, cityId, interpolationMethod);
-    const qAllowable = this.calculatePeakFlow(preDev, iPre);
+    const qAllowable = typeof allowableReleaseRateCfsOverride === 'number'
+      ? Math.max(0, allowableReleaseRateCfsOverride)
+      : this.calculatePeakFlow(preDev, iPre);
 
     let maxStorage = 0;
     let criticalDuration = postDev.tcMinutes;

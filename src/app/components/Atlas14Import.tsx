@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Upload, AlertCircle, FileText, ChevronDown, ChevronRight } from 'lucide-react';
+import { Upload, AlertCircle, FileText, ChevronDown, ChevronRight, Download } from 'lucide-react';
 import Atlas14ImportPreview from './Atlas14ImportPreview';
 
 
@@ -186,6 +186,40 @@ export default function Atlas14Import() {
                 <span>{file.name}</span>
               </div>
             )}
+          </div>
+
+          <div className="mt-3 rounded-md border border-border/60 bg-background/40 p-3 text-xs text-gray-300">
+            <p className="font-medium text-gray-200">CSV format help</p>
+            <p className="mt-1 text-gray-400">
+              The importer accepts either a list format (one storm row per line) or a matrix format (durations as rows, return periods as columns).
+            </p>
+
+            <div className="mt-2 flex flex-wrap gap-2">
+              <a
+                href="/templates/rainfall-import-list-template.csv"
+                download
+                className="inline-flex items-center gap-1 rounded border border-border/70 bg-card px-2 py-1 hover:bg-card/70"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Download list template
+              </a>
+              <a
+                href="/templates/rainfall-import-matrix-template.csv"
+                download
+                className="inline-flex items-center gap-1 rounded border border-border/70 bg-card px-2 py-1 hover:bg-card/70"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Download matrix template
+              </a>
+            </div>
+
+            <details className="mt-2 text-gray-400">
+              <summary className="cursor-pointer text-gray-300">View required fields</summary>
+              <div className="mt-2 space-y-1">
+                <p><span className="text-gray-200">List format columns:</span> <code>city</code>, <code>state</code>, <code>duration_minutes</code>, <code>return_period</code>, <code>intensity</code> (optional: <code>source</code>)</p>
+                <p><span className="text-gray-200">Return period values:</span> <code>1yr</code>, <code>2yr</code>, <code>5yr</code>, <code>10yr</code>, <code>25yr</code>, <code>50yr</code>, <code>100yr</code>, <code>500yr</code></p>
+              </div>
+            </details>
           </div>
         </div>
 

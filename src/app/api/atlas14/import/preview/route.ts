@@ -10,6 +10,19 @@ interface ParsedRainfallData {
   source?: string;
 }
 
+function normalizeReturnPeriod(rawValue: string): string | null {
+  const raw = String(rawValue || '').trim().toLowerCase();
+  if (!raw) return null;
+
+  const numericMatch = raw.match(/(\d+)/);
+  if (!numericMatch) return null;
+
+  const yearValue = numericMatch[1];
+  const normalized = `${yearValue}yr`;
+  const supported = ['1yr', '2yr', '5yr', '10yr', '25yr', '50yr', '100yr', '500yr'];
+  return supported.includes(normalized) ? normalized : null;
+}
+
 // Helper to find the header row index
 function findHeaderRowIndex(lines: string[]): number {
   // Scan first 100 lines for a likely header
@@ -176,6 +189,8 @@ export async function POST(request: Request) {
           const cityKeys = allKeys.filter(k => /city|location|name|place|station|site/i.test(k));
           const stateKeys = allKeys.filter(k => /state|province|region|code/i.test(k) && k.length <= 15);
           const sourceKeys = allKeys.filter(k => /source|origin|provider|agency/i.test(k));
+          const returnPeriodKeys = allKeys.filter(k => /return|period|frequency|recurrence|ari|aep|storm|event/i.test(k));
+          const intensityKeys = allKeys.filter(k => /intensity|in_per_hr|inhr|in\/hr|rainfall|precip/i.test(k));
 
           const columnMappings = {
             city: cityKeys[0] || (fileMetadata.city ? fileMetadata.city : 'not found'),
@@ -209,9 +224,11 @@ export async function POST(request: Request) {
 
             // B. Duration Resolution
             let durationField = '';
+            let durationKeyUsed = '';
             for (const key of durationKeys) {
                  if (row[key]) {
                      durationField = row[key];
+                 durationKeyUsed = key;
                      break;
                  }
             }
@@ -227,8 +244,17 @@ export async function POST(request: Request) {
             
             if (durationMatch) {
               const durationValue = parseFloat(durationMatch[1]);
-              const isDays = durationStr.includes('day');
-              const isHours = durationStr.includes('hour') || durationStr.includes('hr') || (!durationStr.includes('min') && durationValue < 24 && !isDays);
+              const durationKeyLower = durationKeyUsed.toLowerCase();
+              const keySaysDays = /day/.test(durationKeyLower);
+              const keySaysHours = /hour|hr/.test(durationKeyLower);
+              const keySaysMinutes = /minute|min/.test(durationKeyLower);
+
+              const valueSaysDays = durationStr.includes('day');
+              const valueSaysHours = durationStr.includes('hour') || durationStr.includes('hr');
+              const valueSaysMinutes = durationStr.includes('min');
+
+              const isDays = valueSaysDays || keySaysDays;
+              const isHours = !isDays && (valueSaysHours || keySaysHours || (!valueSaysMinutes && !keySaysMinutes && durationValue < 24));
               
               if (isDays) {
                 durationMinutes = Math.round(durationValue * 24 * 60);
@@ -270,8 +296,43 @@ export async function POST(request: Request) {
                    }
                }
             } else {
-                // (Fallback for list format - unlikely for this file type but kept for robustness)
-                // ...
+                let returnPeriodRaw = '';
+                for (const key of returnPeriodKeys) {
+                  if (row[key]) {
+                    returnPeriodRaw = String(row[key]);
+                    break;
+                  }
+                }
+
+                let intensityRaw = '';
+                for (const key of intensityKeys) {
+                  if (row[key]) {
+                    intensityRaw = String(row[key]);
+                    break;
+                  }
+                }
+
+                const normalizedReturnPeriod = normalizeReturnPeriod(returnPeriodRaw);
+                const intensity = parseFloat(intensityRaw.replace(/,/g, '').trim());
+
+                if (!normalizedReturnPeriod) {
+                  warnings.push(`Row ${rowIndex + 2}: Could not map return period "${returnPeriodRaw}" to a supported value.`);
+                  continue;
+                }
+
+                if (isNaN(intensity) || intensity < 0) {
+                  warnings.push(`Row ${rowIndex + 2}: Invalid intensity value "${intensityRaw}".`);
+                  continue;
+                }
+
+                parsedData.push({
+                  city: String(cityField).trim(),
+                  state: String(stateField).trim().toUpperCase(),
+                  durationMinutes,
+                  returnPeriod: normalizedReturnPeriod,
+                  intensity,
+                  source: sourceField || undefined
+                });
             }
           }
 
