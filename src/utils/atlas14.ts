@@ -2,9 +2,12 @@
 // Supports various sources: NOAA Atlas 14, municipal data, custom imports
 
 import { InterpolationMethod, getIntensityInPerHr as getIdfIntensity } from './idf';
+import { buildManualIdfTable, getManualIdfIntensity, type ManualIdfCoefficientsByPeriod } from './manualIdf';
 
 export type ReturnPeriod = '1yr' | '2yr' | '5yr' | '10yr' | '25yr' | '50yr' | '100yr' | '500yr';
 export type { InterpolationMethod } from './idf';
+export type { ManualIdfCoefficientsByPeriod } from './manualIdf';
+export type RainfallMethod = 'atlas14' | 'manual-idf';
 export type SourceType = 'CUSTOM' | 'ATLAS14';
 export type DataUnits = 'ENGLISH' | 'METRIC';
 export type DataBasis = 'INTENSITY' | 'DEPTH';
@@ -28,6 +31,14 @@ export interface City {
   seriesType?: SeriesType;
   lastUpdated?: string;
   dataCount?: number;
+}
+
+export function getRainfallMethodLabel(method: RainfallMethod): string {
+  return method === 'manual-idf' ? 'Manual IDF' : 'NOAA Atlas 14';
+}
+
+export function getInterpolationMethodLabel(method: InterpolationMethod): string {
+  return method === 'log-log' ? 'Log-Log' : 'Linear';
 }
 
 // Cache for API responses
@@ -92,8 +103,14 @@ export async function getIntensity(
   durationMinutes: number, 
   returnPeriod: ReturnPeriod, 
   cityId: number,
-  method: InterpolationMethod = 'log-log'
+  rainfallMethod: RainfallMethod = 'atlas14',
+  method: InterpolationMethod = 'log-log',
+  manualIdfCoefficients?: ManualIdfCoefficientsByPeriod
 ): Promise<number> {
+  if (rainfallMethod === 'manual-idf') {
+    return getManualIdfIntensity(durationMinutes, returnPeriod, manualIdfCoefficients);
+  }
+
   const data = await getRainfallDataByCityId(cityId);
   
   if (data.length === 0) {
@@ -102,6 +119,37 @@ export async function getIntensity(
   
   // Use the IDF interpolation module
   return getIdfIntensity(data, returnPeriod, durationMinutes, method);
+}
+
+export function getIntensityFromData(
+  rainfallData: RainfallData[],
+  returnPeriod: ReturnPeriod,
+  durationMinutes: number,
+  rainfallMethod: RainfallMethod = 'atlas14',
+  method: InterpolationMethod = 'log-log',
+  manualIdfCoefficients?: ManualIdfCoefficientsByPeriod
+): number {
+  if (rainfallMethod === 'manual-idf') {
+    return getManualIdfIntensity(durationMinutes, returnPeriod, manualIdfCoefficients);
+  }
+
+  return getIdfIntensity(rainfallData, returnPeriod, durationMinutes, method);
+}
+
+export function buildDisplayRainfallData(
+  sourceData: RainfallData[],
+  rainfallMethod: RainfallMethod,
+  manualIdfCoefficients?: ManualIdfCoefficientsByPeriod
+): RainfallData[] {
+  if (rainfallMethod === 'manual-idf') {
+    const durations = sourceData.length > 0
+      ? sourceData.map((row) => row.durationMinutes)
+      : [5, 10, 15, 30, 60, 120, 180, 360, 720, 1440];
+
+    return buildManualIdfTable(durations, manualIdfCoefficients);
+  }
+
+  return sourceData;
 }
 
 /**

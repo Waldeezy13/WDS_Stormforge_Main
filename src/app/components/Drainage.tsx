@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Plus, Trash2, Calculator, Table as TableIcon, ArrowRight, Waves, Upload, FileJson, GitBranch } from 'lucide-react';
-import { ReturnPeriod } from '@/utils/atlas14';
+import { ReturnPeriod, InterpolationMethod, RainfallMethod, type ManualIdfCoefficientsByPeriod } from '@/utils/atlas14';
 import type { DrainageArea } from '@/utils/drainageCalculations';
 import { RationalMethod } from '@/utils/drainageCalculations';
 import DrainageImport from './DrainageImport';
@@ -47,6 +47,12 @@ interface DrainageProps {
 
   selectedEvents: ReturnPeriod[];
 
+  rainfallMethod: RainfallMethod;
+
+  manualIdfCoefficients: ManualIdfCoefficientsByPeriod;
+
+  interpolationMethod: InterpolationMethod;
+
   onTotalsChange?: (totals: { existing: DrainageTotals; proposed: DrainageTotals }) => void;
 
   onReturnPeriodsDetected?: (periods: ReturnPeriod[]) => void;
@@ -55,7 +61,7 @@ interface DrainageProps {
 
 
 
-export default function Drainage({ cityId, selectedEvents, onTotalsChange, onReturnPeriodsDetected }: DrainageProps) {
+export default function Drainage({ cityId, selectedEvents, rainfallMethod, manualIdfCoefficients, interpolationMethod, onTotalsChange, onReturnPeriodsDetected }: DrainageProps) {
   // --- State ---
   const [importModalType, setImportModalType] = useState<'existing' | 'proposed' | null>(null);
   
@@ -178,7 +184,7 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
 
           for (const event of selectedEvents) {
 
-            const result = await RationalMethod.calculateRunoff(area, event, cityId);
+            const result = await RationalMethod.calculateRunoff(area, event, cityId, rainfallMethod, interpolationMethod, manualIdfCoefficients);
 
             areaResults[event] = { intensity: result.intensity, peakFlowCfs: result.peakFlowCfs };
 
@@ -209,7 +215,7 @@ export default function Drainage({ cityId, selectedEvents, onTotalsChange, onRet
 
     calculateResults();
 
-  }, [areas, cityId, selectedEvents]);
+  }, [areas, cityId, selectedEvents, rainfallMethod, manualIdfCoefficients, interpolationMethod]);
 
 
 

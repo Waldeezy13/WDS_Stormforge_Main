@@ -1,8 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useRef } from 'react';
-import { ReturnPeriod, InterpolationMethod } from '@/utils/atlas14';
-import { getIntensityInPerHr } from '@/utils/idf';
+import { ReturnPeriod, InterpolationMethod, RainfallMethod, getIntensityFromData, getInterpolationMethodLabel, getRainfallMethodLabel, type ManualIdfCoefficientsByPeriod } from '@/utils/atlas14';
 import { TrendingUp } from 'lucide-react';
 
 // Color mapping for storm events
@@ -21,6 +20,8 @@ const getEventColor = (event: ReturnPeriod): string => {
 interface IdfCurveChartProps {
   rainfallData: Array<{ durationMinutes: number; intensities: Record<ReturnPeriod, number> }>;
   selectedEvents: ReturnPeriod[];
+  rainfallMethod: RainfallMethod;
+  manualIdfCoefficients: ManualIdfCoefficientsByPeriod;
   interpolationMethod: InterpolationMethod;
 }
 
@@ -36,6 +37,8 @@ interface IdfCurveChartProps {
 export default function IdfCurveChart({ 
   rainfallData, 
   selectedEvents, 
+  rainfallMethod,
+  manualIdfCoefficients,
   interpolationMethod 
 }: IdfCurveChartProps) {
   const chartWidth = 800;
@@ -76,12 +79,12 @@ export default function IdfCurveChart({
       // Build curve using the log-spaced sample points
       const curve = sampleDurations.map(duration => ({
         durationMinutes: duration,
-        intensityInPerHr: getIntensityInPerHr(rainfallData, event, duration, interpolationMethod)
+        intensityInPerHr: getIntensityFromData(rainfallData, event, duration, rainfallMethod, interpolationMethod, manualIdfCoefficients)
       })).filter(p => p.intensityInPerHr > 0);
       
       return { event, curve, color: getEventColor(event) };
     });
-  }, [rainfallData, selectedEvents, interpolationMethod]);
+  }, [rainfallData, selectedEvents, rainfallMethod, manualIdfCoefficients, interpolationMethod]);
 
   // Calculate axis ranges dynamically from the data
   const { minDuration, maxDuration } = useMemo(() => {
@@ -155,8 +158,7 @@ export default function IdfCurveChart({
 
   // Get interpolated intensity for a given duration and event using proper IDF interpolation
   const getInterpolatedIntensity = (duration: number, event: ReturnPeriod): number => {
-    // Use the proper IDF interpolation function which handles log-log or linear correctly
-    return getIntensityInPerHr(rainfallData, event, duration, interpolationMethod);
+    return getIntensityFromData(rainfallData, event, duration, rainfallMethod, interpolationMethod, manualIdfCoefficients);
   };
 
   // Handle mouse move on chart
@@ -278,17 +280,23 @@ export default function IdfCurveChart({
           <TrendingUp className="w-5 h-5 text-primary" />
           <h3 className="font-semibold text-lg">IDF Curves</h3>
           <span className={`text-xs font-normal ml-2 py-0.5 px-2 rounded-full ${
-            interpolationMethod === 'log-log' 
+            rainfallMethod === 'manual-idf'
+              ? 'bg-amber-900/50 text-amber-300'
+              : interpolationMethod === 'log-log' 
               ? 'bg-emerald-900/50 text-emerald-400' 
               : 'bg-amber-900/50 text-amber-400'
           }`}>
-            {interpolationMethod === 'log-log' ? 'Log-Log Interpolation' : 'Linear Interpolation'}
+            {rainfallMethod === 'manual-idf'
+              ? getRainfallMethodLabel(rainfallMethod)
+              : `${getRainfallMethodLabel(rainfallMethod)} - ${getInterpolationMethodLabel(interpolationMethod)}`}
           </span>
         </div>
         <p className="text-xs text-gray-500">
-          {interpolationMethod === 'log-log' 
-            ? 'Curves appear as straight lines between data points (standard for IDF relationships).'
-            : 'Curves appear curved between data points on the log-log scale graph.'}
+          {rainfallMethod === 'manual-idf'
+            ? 'Curves are computed directly from the Manual IDF equation. Points are shown only for supported storms.'
+            : interpolationMethod === 'log-log' 
+              ? 'Curves appear as straight lines between data points (standard for IDF relationships).'
+              : 'Curves appear curved between data points on the log-log scale graph.'}
           {' '}Data points (●) are from imported rainfall data.
         </p>
       </div>
@@ -509,7 +517,7 @@ export default function IdfCurveChart({
                     ? 'bg-sky-500/20 text-sky-400' 
                     : 'bg-slate-600/50 text-slate-400'
                 }`}>
-                  {tooltipData.isDataPoint ? 'Source Data' : 'Interpolated'}
+                  {tooltipData.isDataPoint ? 'Source Data' : rainfallMethod === 'manual-idf' ? 'Computed' : 'Interpolated'}
                 </span>
               </div>
               

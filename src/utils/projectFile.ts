@@ -1,4 +1,4 @@
-import type { ReturnPeriod, InterpolationMethod } from './atlas14';
+import type { ReturnPeriod, InterpolationMethod, RainfallMethod, ManualIdfCoefficientsByPeriod } from './atlas14';
 import type { DrainageArea } from './drainageCalculations';
 import type { StageStorageCurve } from './stageStorage';
 import type { OutfallStructure } from './hydraulics';
@@ -22,6 +22,8 @@ export type PondMode = 'generic' | 'custom';
 export interface StormforgeProjectState {
   cityId: number;
   selectedEvents: ReturnPeriod[];
+  rainfallMethod: RainfallMethod;
+  manualIdfCoefficients: ManualIdfCoefficientsByPeriod;
   interpolationMethod: InterpolationMethod;
   projectMetadata: ProjectMetadata | null;
   drainageAreas: DrainageArea[];
@@ -54,6 +56,7 @@ export interface ProjectFileValidationResult {
 }
 
 const RETURN_PERIODS: ReturnPeriod[] = ['1yr', '2yr', '5yr', '10yr', '25yr', '50yr', '100yr', '500yr'];
+const RAINFALL_METHODS: RainfallMethod[] = ['atlas14', 'manual-idf'];
 const INTERPOLATION_METHODS: InterpolationMethod[] = ['linear', 'log-log'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -105,7 +108,21 @@ export function validateProjectFile(data: unknown): ProjectFileValidationResult 
     }
   }
 
-  if (!INTERPOLATION_METHODS.includes(state.interpolationMethod as InterpolationMethod)) {
+  if (typeof state.rainfallMethod === 'undefined') {
+    warnings.push('state.rainfallMethod missing; defaulting to atlas14');
+  } else if (!RAINFALL_METHODS.includes(state.rainfallMethod as RainfallMethod)) {
+    errors.push('state.rainfallMethod is invalid');
+  }
+
+  if (typeof state.manualIdfCoefficients === 'undefined') {
+    warnings.push('state.manualIdfCoefficients missing; default Manual IDF values will be used');
+  } else if (!isRecord(state.manualIdfCoefficients)) {
+    errors.push('state.manualIdfCoefficients must be an object');
+  }
+
+  if (typeof state.interpolationMethod === 'undefined') {
+    warnings.push('state.interpolationMethod missing; defaulting to log-log');
+  } else if (!INTERPOLATION_METHODS.includes(state.interpolationMethod as InterpolationMethod)) {
     errors.push('state.interpolationMethod is invalid');
   }
 

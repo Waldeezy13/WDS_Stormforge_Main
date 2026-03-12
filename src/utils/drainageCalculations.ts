@@ -1,4 +1,4 @@
-import { getIntensity, ReturnPeriod } from '@/utils/atlas14';
+import { getIntensity, InterpolationMethod, RainfallMethod, ReturnPeriod, type ManualIdfCoefficientsByPeriod } from '@/utils/atlas14';
 import type { DrainageAreaExportDto } from '@/utils/stormforgeImport';
 
 /**
@@ -54,7 +54,14 @@ export class RationalMethod {
   /**
    * Calculates runoff for a single drainage area for a specific return period
    */
-  static async calculateRunoff(area: DrainageArea, returnPeriod: ReturnPeriod, cityId: number): Promise<DrainageResult> {
+  static async calculateRunoff(
+    area: DrainageArea,
+    returnPeriod: ReturnPeriod,
+    cityId: number,
+    rainfallMethod: RainfallMethod = 'atlas14',
+    interpolationMethod: InterpolationMethod = 'log-log',
+    manualIdfCoefficients?: ManualIdfCoefficientsByPeriod
+  ): Promise<DrainageResult> {
     // If excluded, return 0 flow but keep metadata valid
     if (area.isIncluded === false) { 
         return {
@@ -65,7 +72,7 @@ export class RationalMethod {
         };
     }
 
-    const intensity = await getIntensity(area.tcMinutes, returnPeriod, cityId);
+        const intensity = await getIntensity(area.tcMinutes, returnPeriod, cityId, rainfallMethod, interpolationMethod, manualIdfCoefficients);
     const peakFlow = this.calculatePeakFlow(area.cFactor, intensity, area.areaAcres);
 
     return {

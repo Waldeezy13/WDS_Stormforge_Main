@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { FileText, Printer, FileSpreadsheet, Download } from 'lucide-react';
-import { ReturnPeriod, City, InterpolationMethod } from '@/utils/atlas14';
+import { ReturnPeriod, City, InterpolationMethod, RainfallMethod, getInterpolationMethodLabel, getRainfallMethodLabel } from '@/utils/atlas14';
 import { ModifiedRationalResult } from '@/utils/rationalMethod';
 import { OutfallStructure, calculateTotalDischarge } from '@/utils/hydraulics';
 import type { DrainageArea } from '@/utils/drainageCalculations';
@@ -17,6 +17,7 @@ interface ReportsProps {
   cityId: number;
   selectedCity: City | null;
   selectedEvents: ReturnPeriod[];
+  rainfallMethod: RainfallMethod;
   interpolationMethod: InterpolationMethod;
   drainageTotals: {
     existing: {
@@ -46,6 +47,7 @@ const DRAINAGE_AREAS_KEY = 'wds-stormforge-drainage-areas';
 export default function Reports({
   selectedCity,
   selectedEvents,
+  rainfallMethod,
   interpolationMethod,
   drainageTotals,
   pondResults,
@@ -193,8 +195,8 @@ export default function Reports({
     allData.push(['']);
     allData.push(['SITE DATA']);
     allData.push(['Location', selectedCity ? `${selectedCity.name}, ${selectedCity.state}` : 'N/A']);
-    allData.push(['Rainfall Data Source', 'NOAA Atlas 14']);
-    allData.push(['Interpolation Method', interpolationMethod === 'log-log' ? 'Log-Log' : 'Linear']);
+    allData.push(['Rainfall Data Source', getRainfallMethodLabel(rainfallMethod)]);
+    allData.push(['Interpolation Method', rainfallMethod === 'atlas14' ? getInterpolationMethodLabel(interpolationMethod) : 'N/A']);
     allData.push(['Design Storm Events', selectedEvents.map(e => e.toUpperCase()).join(', ')]);
     allData.push(['']);
 
@@ -463,11 +465,11 @@ export default function Reports({
               </tr>
               <tr>
                 <td className="py-1 font-semibold">Rainfall Data Source:</td>
-                <td className="py-1">NOAA Atlas 14</td>
+                <td className="py-1">{getRainfallMethodLabel(rainfallMethod)}</td>
               </tr>
               <tr>
                 <td className="py-1 font-semibold">Interpolation Method:</td>
-                <td className="py-1">{interpolationMethod === 'log-log' ? 'Log-Log' : 'Linear'}</td>
+                <td className="py-1">{rainfallMethod === 'atlas14' ? getInterpolationMethodLabel(interpolationMethod) : 'N/A'}</td>
               </tr>
               <tr>
                 <td className="py-1 font-semibold">Design Storm Events:</td>
@@ -677,7 +679,8 @@ export default function Reports({
           <table className="w-full text-sm">
             <tbody>
               <tr><td className="py-0.5 w-48 font-semibold">Design Method:</td><td className="py-0.5">Modified Rational Method</td></tr>
-              <tr><td className="py-0.5 font-semibold">Rainfall Source:</td><td className="py-0.5">NOAA Atlas 14</td></tr>
+              <tr><td className="py-0.5 font-semibold">Rainfall Source:</td><td className="py-0.5">{getRainfallMethodLabel(rainfallMethod)}</td></tr>
+              <tr><td className="py-0.5 font-semibold">Interpolation:</td><td className="py-0.5">{rainfallMethod === 'atlas14' ? getInterpolationMethodLabel(interpolationMethod) : 'N/A'}</td></tr>
               {controllingStorm && (
                 <>
                   <tr><td className="py-0.5 font-semibold">Controlling Storm:</td><td className="py-0.5">{controllingStorm.stormEvent.toUpperCase()}</td></tr>

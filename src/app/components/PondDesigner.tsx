@@ -4,8 +4,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Grid } from '@react-three/drei';
 import type { ModifiedRationalResult } from '@/utils/rationalMethod';
-import { ReturnPeriod, InterpolationMethod, getRainfallData } from '@/utils/atlas14';
-import { getIntensityInPerHr } from '@/utils/idf';
+import { ReturnPeriod, InterpolationMethod, RainfallMethod, getIntensityFromData, getRainfallData, type ManualIdfCoefficientsByPeriod } from '@/utils/atlas14';
 import { ModifiedRationalMethod } from '@/utils/rationalMethod';
 import { Cuboid, Settings2, AlertTriangle, Droplets, TrendingUp, ChevronDown, Calculator, Upload, Plus, Trash2, Table, CheckCircle2, XCircle, GitBranch, Download } from 'lucide-react';
 import { 
@@ -253,8 +252,9 @@ interface PondDesignerProps {
   drainageTotals: DrainageTotalsSummary;
   pondDims: PondDims;
   onPondDimsChange: (dims: PondDims) => void;
+  rainfallMethod: RainfallMethod;
+  manualIdfCoefficients: ManualIdfCoefficientsByPeriod;
   interpolationMethod: InterpolationMethod;
-  setInterpolationMethod: (method: InterpolationMethod) => void;
   pondMode: PondMode;
   onPondModeChange: (mode: PondMode) => void;
   stageStorageCurve: StageStorageCurve | null;
@@ -334,6 +334,8 @@ function DurationCalculationsGrid({
   iterationFrequency,
   onIterationFrequencyChange,
   cityId,
+  rainfallMethod,
+  manualIdfCoefficients,
   interpolationMethod,
   drainageTotals
 }: { 
@@ -344,6 +346,8 @@ function DurationCalculationsGrid({
   iterationFrequency: number;
   onIterationFrequencyChange: (frequency: number) => void;
   cityId: number;
+  rainfallMethod: RainfallMethod;
+  manualIdfCoefficients: ManualIdfCoefficientsByPeriod;
   interpolationMethod: InterpolationMethod;
   drainageTotals: DrainageTotalsSummary | null;
 }) {
@@ -422,7 +426,7 @@ function DurationCalculationsGrid({
         // and interpolate only for durations not in the table
         if (rainfallData.length > 0 && displayResult && drainageTotals) {
           const returnPeriod = displayResult.stormEvent;
-          const intensity = getIntensityInPerHr(rainfallData, returnPeriod, duration, interpolationMethod);
+          const intensity = getIntensityFromData(rainfallData, returnPeriod, duration, rainfallMethod, interpolationMethod, manualIdfCoefficients);
           
           // Calculate peak inflow using Modified Rational: Q = C * I * A
           const postDevArea = drainageTotals.proposed.totalArea;
@@ -814,8 +818,9 @@ export default function PondDesigner({
   drainageTotals, 
   pondDims, 
   onPondDimsChange, 
+  rainfallMethod,
+  manualIdfCoefficients,
   interpolationMethod, 
-  setInterpolationMethod,
   pondMode,
   onPondModeChange,
   stageStorageCurve,
@@ -1044,18 +1049,8 @@ export default function PondDesigner({
                 method={calculationMethod} 
                 onMethodChange={setCalculationMethod}
               />
-              <div className="flex items-center gap-2">
-                <label className="text-xs text-gray-400">IDF:</label>
-                <select
-                  value={interpolationMethod}
-                  onChange={(e) => setInterpolationMethod(e.target.value as InterpolationMethod)}
-                  className="bg-slate-800 border border-border rounded px-3 py-1.5 text-xs text-white focus:ring-1 focus:ring-primary outline-none"
-                  title="IDF interpolation method"
-                  aria-label="IDF interpolation method"
-                >
-                  <option value="log-log">Log-Log</option>
-                  <option value="linear">Linear</option>
-                </select>
+              <div className="rounded border border-border bg-slate-800/50 px-3 py-2 text-xs text-gray-300">
+                Rainfall: <span className="font-semibold text-white">{rainfallMethod === 'manual-idf' ? 'Manual IDF' : 'NOAA Atlas 14'}</span>
               </div>
             </div>
           </div>
@@ -1287,6 +1282,8 @@ export default function PondDesigner({
                   iterationFrequency={iterationFrequency}
                   onIterationFrequencyChange={setIterationFrequency}
                   cityId={cityId}
+                  rainfallMethod={rainfallMethod}
+                  manualIdfCoefficients={manualIdfCoefficients}
                   interpolationMethod={interpolationMethod}
                   drainageTotals={drainageTotals}
                 />

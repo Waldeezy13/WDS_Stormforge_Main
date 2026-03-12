@@ -1,4 +1,4 @@
-import { getIntensity, ReturnPeriod } from './atlas14';
+import { getIntensity, InterpolationMethod, RainfallMethod, ReturnPeriod, type ManualIdfCoefficientsByPeriod } from './atlas14';
 
 export interface SiteParams {
   areaAcres: number;
@@ -41,12 +41,14 @@ export class ModifiedRationalMethod {
     postDev: SiteParams,
     returnPeriod: ReturnPeriod,
     cityId: number,
-    interpolationMethod: 'linear' | 'log-log' = 'log-log',
+    rainfallMethod: RainfallMethod = 'atlas14',
+    interpolationMethod: InterpolationMethod = 'log-log',
+    manualIdfCoefficients?: ManualIdfCoefficientsByPeriod,
     allowableReleaseRateCfsOverride?: number
   ): Promise<ModifiedRationalResult> {
     // 1. Calculate Allowable Release Rate (Q_pre)
     // Q_pre is calculated at the Pre-Dev Time of Concentration
-    const iPre = await getIntensity(preDev.tcMinutes, returnPeriod, cityId, interpolationMethod);
+    const iPre = await getIntensity(preDev.tcMinutes, returnPeriod, cityId, rainfallMethod, interpolationMethod, manualIdfCoefficients);
     const qAllowable = typeof allowableReleaseRateCfsOverride === 'number'
       ? Math.max(0, allowableReleaseRateCfsOverride)
       : this.calculatePeakFlow(preDev, iPre);
@@ -72,7 +74,7 @@ export class ModifiedRationalMethod {
     const durationCalculations: DurationCalculation[] = [];
 
     for (const duration of durationsToCheck) {
-      const intensity = await getIntensity(duration, returnPeriod, cityId, interpolationMethod);
+      const intensity = await getIntensity(duration, returnPeriod, cityId, rainfallMethod, interpolationMethod, manualIdfCoefficients);
       const qPost = this.calculatePeakFlow(postDev, intensity);
       
       // Simplified Modified Rational Method Storage Formula:

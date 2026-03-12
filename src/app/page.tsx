@@ -8,7 +8,7 @@ import Drainage from './components/Drainage';
 import OutfallDesigner from './components/OutfallDesigner';
 import Reports from './components/Reports';
 import ProjectImport from './components/ProjectImport';
-import { ReturnPeriod, getCitiesByState, City, InterpolationMethod } from '@/utils/atlas14';
+import { ReturnPeriod, getCitiesByState, City, InterpolationMethod, RainfallMethod, getRainfallMethodLabel, type ManualIdfCoefficientsByPeriod } from '@/utils/atlas14';
 import { SiteParams, ModifiedRationalMethod, ModifiedRationalResult } from '@/utils/rationalMethod';
 import { StageStorageCurve } from '@/utils/stageStorage';
 import { ProjectMetadata, exportToStormforgeJson, downloadStormforgeJson, DrainageCalculationResult } from '@/utils/stormforgeImport';
@@ -17,6 +17,7 @@ import { OutfallStructure } from '@/utils/hydraulics';
 import { getAutoSolveEnabled } from '@/utils/hydraulicsConfig';
 import { buildProjectFile, downloadProjectFile, parseProjectFile, type StormforgeProjectState } from '@/utils/projectFile';
 import type { DrainageArea } from '@/utils/drainageCalculations';
+import { createDefaultManualIdfCoefficients } from '@/utils/manualIdf';
 
 export type PondMode = 'generic' | 'custom';
 
@@ -35,6 +36,7 @@ const OUTFALL_PLATE_SIZE_KEY = 'outfallDesigner_plateSize';
 const OUTFALL_STYLE_KEY = 'outfallDesigner_outfallStyle';
 const AUTO_SOLVE_KEY = 'autoSolveEnabled';
 const PROJECT_FILE_NAME_KEY = 'wds-stormforge-project-file-name';
+const MANUAL_IDF_COEFFICIENTS_KEY = 'wds-stormforge-manual-idf-coefficients';
 
 const DEFAULT_SELECTED_EVENTS: ReturnPeriod[] = ['5yr', '25yr', '100yr'];
 const DEFAULT_POND_DIMS = { length: 100, width: 100, depth: 10 };
@@ -48,6 +50,8 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('hydrology');
   const [cityId, setCityId] = useState<number>(0);
   const [selectedEvents, setSelectedEvents] = useState<ReturnPeriod[]>(DEFAULT_SELECTED_EVENTS);
+  const [rainfallMethod, setRainfallMethod] = useState<RainfallMethod>('atlas14');
+  const [manualIdfCoefficients, setManualIdfCoefficients] = useState<ManualIdfCoefficientsByPeriod>(createDefaultManualIdfCoefficients);
   const [interpolationMethod, setInterpolationMethod] = useState<InterpolationMethod>('log-log');
   const [citiesByState, setCitiesByState] = useState<Record<string, City[]>>({});
   const [drainageTotals, setDrainageTotals] = useState<{
@@ -96,6 +100,23 @@ export default function Home() {
     }
   }, []);
 
+  useEffect(() => {
+    const storedManualIdf = localStorage.getItem(MANUAL_IDF_COEFFICIENTS_KEY);
+    if (!storedManualIdf) {
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(storedManualIdf) as ManualIdfCoefficientsByPeriod;
+      setManualIdfCoefficients({
+        ...createDefaultManualIdfCoefficients(),
+        ...parsed,
+      });
+    } catch {
+      // Ignore invalid saved values and keep defaults.
+    }
+  }, []);
+
   // Load cities and set default city (only once on mount)
   useEffect(() => {
     async function loadDefaultCity() {
@@ -122,6 +143,10 @@ export default function Home() {
       localStorage.removeItem(PROJECT_META_KEY);
     }
   }, [projectMetadata]);
+
+  useEffect(() => {
+    localStorage.setItem(MANUAL_IDF_COEFFICIENTS_KEY, JSON.stringify(manualIdfCoefficients));
+  }, [manualIdfCoefficients]);
 
   // Handle project import from C3D
   const handleProjectImport = useCallback((
@@ -346,10 +371,16 @@ export default function Home() {
     localStorage.setItem(OUTFALL_STYLE_KEY, state.outfallStyle);
     localStorage.setItem(OUTFALL_PLATE_SIZE_KEY, JSON.stringify(state.plateSize));
     localStorage.setItem(AUTO_SOLVE_KEY, state.autoSolveEnabled.toString());
+    localStorage.setItem(MANUAL_IDF_COEFFICIENTS_KEY, JSON.stringify(state.manualIdfCoefficients ?? createDefaultManualIdfCoefficients()));
 
     setCityId(state.cityId);
     setSelectedEvents(state.selectedEvents);
-    setInterpolationMethod(state.interpolationMethod);
+    setRainfallMethod(state.rainfallMethod === 'manual-idf' ? 'manual-idf' : 'atlas14');
+    setManualIdfCoefficients({
+      ...createDefaultManualIdfCoefficients(),
+      ...(state.manualIdfCoefficients ?? {}),
+    });
+    setInterpolationMethod(state.interpolationMethod === 'linear' ? 'linear' : 'log-log');
     setProjectMetadata(state.projectMetadata);
     setPondDims(state.pondDims);
     setPondInvertElevation(state.pondInvertElevation);
@@ -388,6 +419,8 @@ export default function Home() {
     const state: StormforgeProjectState = {
       cityId,
       selectedEvents,
+      rainfallMethod,
+      manualIdfCoefficients,
       interpolationMethod,
       projectMetadata,
       drainageAreas: storedAreas,
@@ -416,6 +449,8 @@ export default function Home() {
   }, [
     cityId,
     selectedEvents,
+    rainfallMethod,
+    manualIdfCoefficients,
     interpolationMethod,
     projectMetadata,
     pondDims,
@@ -457,6 +492,8 @@ export default function Home() {
     const blankState: StormforgeProjectState = {
       cityId: 0,
       selectedEvents: [],
+      rainfallMethod: 'atlas14',
+      manualIdfCoefficients: createDefaultManualIdfCoefficients(),
       interpolationMethod: 'log-log',
       projectMetadata: null,
       drainageAreas: [],
@@ -571,7 +608,9 @@ export default function Home() {
               postDev,
               p,
               cityId,
+              rainfallMethod,
               interpolationMethod,
+              manualIdfCoefficients,
               drainageTotals
                 ? Math.max(
                     0,
@@ -593,7 +632,7 @@ export default function Home() {
     }
 
     calculateResults();
-  }, [cityId, selectedEvents, preDev, postDev, interpolationMethod, drainageTotals]);
+  }, [cityId, selectedEvents, preDev, postDev, rainfallMethod, interpolationMethod, manualIdfCoefficients, drainageTotals]);
 
   // Mark solver as needing rerun when pond dims or mode change
   useEffect(() => {
@@ -638,7 +677,7 @@ export default function Home() {
       )}
 
       <div className="w-full border-b border-border bg-slate-900/80 sticky top-16 z-40">
-        <div className="container mx-auto px-6 py-2 flex flex-wrap items-center justify-between gap-2 text-xs sm:text-sm text-gray-200">
+        <div className="container mx-auto px-6 py-2 flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm text-gray-200">
           <div>
             Location:{' '}
             <span className="font-semibold">
@@ -650,11 +689,47 @@ export default function Home() {
               </span>
             )}
           </div>
-          <div className="text-gray-400">
-            Source:{' '}
-            <span className="font-semibold">
-              {selectedCity?.source || 'N/A'}
-            </span>
+          <div className="flex flex-wrap items-center gap-3 text-gray-400">
+            <div>
+              Source:{' '}
+              <span className="font-semibold">
+                {rainfallMethod === 'manual-idf' ? getRainfallMethodLabel(rainfallMethod) : (selectedCity?.source || 'N/A')}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <label htmlFor="top-rainfall-method" className="text-gray-400">Rainfall</label>
+              <select
+                id="top-rainfall-method"
+                value={rainfallMethod}
+                onChange={(e) => setRainfallMethod(e.target.value as RainfallMethod)}
+                className="bg-slate-800 border border-border rounded px-3 py-1.5 text-xs text-white focus:ring-1 focus:ring-primary outline-none"
+              >
+                <option value="atlas14">NOAA Atlas 14</option>
+                <option value="manual-idf">Manual IDF</option>
+              </select>
+            </div>
+            {rainfallMethod === 'atlas14' ? (
+              <div className="flex items-center gap-2">
+                <label htmlFor="top-interpolation-method" className="text-gray-400">IDF</label>
+                <select
+                  id="top-interpolation-method"
+                  value={interpolationMethod}
+                  onChange={(e) => setInterpolationMethod(e.target.value as InterpolationMethod)}
+                  className="bg-slate-800 border border-border rounded px-3 py-1.5 text-xs text-white focus:ring-1 focus:ring-primary outline-none"
+                >
+                  <option value="log-log">Log-Log</option>
+                  <option value="linear">Linear</option>
+                </select>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setActiveTab('hydrology')}
+                className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-200 transition-colors hover:bg-amber-500/20"
+              >
+                Edit EBD Values
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -667,6 +742,9 @@ export default function Home() {
               setCityId={setCityId}
               selectedEvents={selectedEvents}
               setSelectedEvents={setSelectedEvents}
+              rainfallMethod={rainfallMethod}
+              manualIdfCoefficients={manualIdfCoefficients}
+              setManualIdfCoefficients={setManualIdfCoefficients}
               interpolationMethod={interpolationMethod}
               setInterpolationMethod={setInterpolationMethod}
             />
@@ -678,6 +756,9 @@ export default function Home() {
             key={`drainage-${projectLoadNonce}`}
             cityId={cityId} 
             selectedEvents={selectedEvents} 
+            rainfallMethod={rainfallMethod}
+            manualIdfCoefficients={manualIdfCoefficients}
+            interpolationMethod={interpolationMethod}
             onTotalsChange={setDrainageTotals}
             onReturnPeriodsDetected={setSelectedEvents}
           />
@@ -692,8 +773,9 @@ export default function Home() {
                drainageTotals={drainageTotals}
                pondDims={pondDims}
                onPondDimsChange={setPondDims}
+               rainfallMethod={rainfallMethod}
+               manualIdfCoefficients={manualIdfCoefficients}
                interpolationMethod={interpolationMethod}
-               setInterpolationMethod={setInterpolationMethod}
                pondMode={pondMode}
                onPondModeChange={setPondMode}
                stageStorageCurve={stageStorageCurve}
@@ -732,6 +814,7 @@ export default function Home() {
               cityId={cityId}
               selectedCity={selectedCity}
               selectedEvents={selectedEvents}
+              rainfallMethod={rainfallMethod}
               interpolationMethod={interpolationMethod}
               drainageTotals={drainageTotals}
               pondResults={pondResults}

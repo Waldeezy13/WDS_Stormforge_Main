@@ -1,24 +1,28 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { ReturnPeriod, getRainfallData, getCitiesByState, clearAtlas14Cache, City, InterpolationMethod } from '@/utils/atlas14';
+import { ReturnPeriod, getRainfallData, getCitiesByState, clearAtlas14Cache, City, InterpolationMethod, RainfallMethod, buildDisplayRainfallData, getInterpolationMethodLabel, getRainfallMethodLabel, type ManualIdfCoefficientsByPeriod } from '@/utils/atlas14';
 import { MapPin, CloudRain, Settings, Globe, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import RainfallDataImport from './Atlas14Import';
 import IdfCurveChart from './charts/IdfCurveChart';
 import SearchableComboBox, { ComboBoxOption } from './SearchableComboBox';
+import { MANUAL_IDF_EDITABLE_EVENTS, supportsManualIdf } from '@/utils/manualIdf';
 
 interface HydrologyProps {
   cityId: number;
   setCityId: (cityId: number) => void;
   selectedEvents: ReturnPeriod[];
   setSelectedEvents: (events: ReturnPeriod[]) => void;
+  rainfallMethod: RainfallMethod;
+  manualIdfCoefficients: ManualIdfCoefficientsByPeriod;
+  setManualIdfCoefficients: React.Dispatch<React.SetStateAction<ManualIdfCoefficientsByPeriod>>;
   interpolationMethod: InterpolationMethod;
   setInterpolationMethod: (method: InterpolationMethod) => void;
 }
 
 const AVAILABLE_EVENTS: ReturnPeriod[] = ['1yr', '2yr', '5yr', '10yr', '25yr', '50yr', '100yr', '500yr'];
 
-export default function Hydrology({ cityId, setCityId, selectedEvents, setSelectedEvents, interpolationMethod, setInterpolationMethod }: HydrologyProps) {
+export default function Hydrology({ cityId, setCityId, selectedEvents, setSelectedEvents, rainfallMethod, manualIdfCoefficients, setManualIdfCoefficients, interpolationMethod, setInterpolationMethod }: HydrologyProps) {
   const [citiesByState, setCitiesByState] = useState<Record<string, City[]>>({});
   const [rainfallData, setRainfallData] = useState<Array<{ durationMinutes: number; intensities: Record<ReturnPeriod, number> }>>([]);
   const [loading, setLoading] = useState(true);
@@ -38,6 +42,32 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
   
   // Refresh state
   const [refreshingCityId, setRefreshingCityId] = useState<number | null>(null);
+
+  const updateManualIdfCoefficient = (returnPeriod: ReturnPeriod, field: 'b' | 'd' | 'e', value: string) => {
+    setManualIdfCoefficients((current) => {
+      const next = { ...current };
+      const existing = { ...(current[returnPeriod] ?? {}) };
+
+      if (value.trim() === '') {
+        delete existing[field];
+      } else {
+        const parsed = Number.parseFloat(value);
+        existing[field] = Number.isFinite(parsed) ? parsed : undefined;
+      }
+
+      if (
+        typeof existing.b === 'undefined' &&
+        typeof existing.d === 'undefined' &&
+        typeof existing.e === 'undefined'
+      ) {
+        delete next[returnPeriod];
+      } else {
+        next[returnPeriod] = existing;
+      }
+
+      return next;
+    });
+  };
 
   // Function to reload cities and data
   const reloadCities = async () => {
@@ -227,6 +257,18 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
     .flat()
     .find(c => c.id === cityId);
 
+  const missingSelectedManualIdfEvents = useMemo(() => {
+    if (rainfallMethod !== 'manual-idf') {
+      return [] as ReturnPeriod[];
+    }
+
+    return selectedEvents.filter((event) => !supportsManualIdf(event, manualIdfCoefficients));
+  }, [selectedEvents, rainfallMethod, manualIdfCoefficients]);
+
+  const displayRainfallData = useMemo(() => {
+    return buildDisplayRainfallData(rainfallData, rainfallMethod, manualIdfCoefficients);
+  }, [rainfallData, rainfallMethod, manualIdfCoefficients]);
+
   return (
     <div className="p-8 max-w-7xl mx-auto text-foreground">
       
@@ -302,6 +344,11 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
               </button>
             ))}
           </div>
+          {missingSelectedManualIdfEvents.length > 0 && (
+            <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
+              Manual IDF is selected, but these active storms do not have complete EBD values: {missingSelectedManualIdfEvents.map((event) => event.toUpperCase()).join(', ')}. They will display as N/A and calculate as zero until b, d, and e are entered below.
+            </div>
+          )}
         </div>
       </div>
 
@@ -450,14 +497,14 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
       )}
 
       {/* Data Table */}
-      {rainfallData.length > 0 && (
+      {displayRainfallData.length > 0 && (
         <div className="bg-card border border-border rounded-lg overflow-hidden shadow-xl mb-8">
           <div className="px-6 py-4 border-b border-border bg-slate-900/50">
             <h3 className="font-semibold text-lg flex items-center gap-2">
                Rainfall Intensity Data (in/hr)
-               {selectedCity?.source && (
+               {(rainfallMethod === 'manual-idf' || selectedCity?.source) && (
                  <span className="text-xs font-normal text-gray-400 ml-2 py-0.5 px-2 bg-slate-800 rounded-full">
-                   Source: {selectedCity.source}
+                   Source: {rainfallMethod === 'manual-idf' ? getRainfallMethodLabel(rainfallMethod) : selectedCity?.source}
                  </span>
                )}
             </h3>
@@ -475,14 +522,14 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {rainfallData.map((row) => (
+                {displayRainfallData.map((row) => (
                   <tr key={row.durationMinutes} className="hover:bg-white/5 transition-colors">
                     <td className="px-6 py-3 font-mono text-gray-300">{row.durationMinutes}</td>
                     {AVAILABLE_EVENTS.map(event => (
                       <td key={event} className={`px-6 py-3 text-right font-mono ${
                         selectedEvents.includes(event) ? 'text-white bg-primary/5' : 'text-gray-500'
                       }`}>
-                        {row.intensities[event]?.toFixed(2) || 'N/A'}
+                        {Number.isFinite(row.intensities[event]) ? row.intensities[event].toFixed(2) : 'N/A'}
                       </td>
                     ))}
                   </tr>
@@ -494,61 +541,110 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
       )}
 
       {/* IDF Curve Visualization */}
-      {rainfallData.length > 0 && selectedEvents.length > 0 && (
+      {displayRainfallData.length > 0 && selectedEvents.length > 0 && (
         <IdfCurveChart 
-          rainfallData={rainfallData}
+          rainfallData={displayRainfallData}
           selectedEvents={selectedEvents}
+          rainfallMethod={rainfallMethod}
+          manualIdfCoefficients={manualIdfCoefficients}
           interpolationMethod={interpolationMethod}
         />
       )}
 
-      {/* Interpolation Method Selection - Moved to Bottom */}
-      <div className="mb-8 bg-card p-6 rounded-lg border border-border shadow-lg">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="p-2 bg-primary/10 rounded-full text-primary">
-            <Settings className="w-5 h-5" />
+      {rainfallMethod === 'atlas14' && (
+        <div className="mb-8 bg-card p-6 rounded-lg border border-border shadow-lg">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 bg-primary/10 rounded-full text-primary">
+              <Settings className="w-5 h-5" />
+            </div>
+            <h2 className="text-lg font-semibold">Interpolation Method</h2>
           </div>
-          <h2 className="text-lg font-semibold">Interpolation Method</h2>
+          <p className="text-sm text-gray-400 mb-4">
+            Select how Atlas 14 rainfall data is interpolated between duration points. The IDF curve above updates to reflect the selected method.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <button
+              onClick={() => setInterpolationMethod('log-log')}
+              aria-label="Select Log-Log interpolation method"
+              className={`px-4 py-3 rounded-lg border text-sm font-medium transition-all text-left flex-1 ${
+                interpolationMethod === 'log-log'
+                  ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400'
+                  : 'bg-background border-border text-gray-400 hover:border-gray-500'
+              }`}
+            >
+              <div className="font-semibold mb-1">Log-Log Interpolation</div>
+              <div className="text-xs opacity-75">
+                Standard method for IDF curves. Interpolates linearly in log-log space, producing power-law relationships between data points.
+              </div>
+            </button>
+            <button
+              onClick={() => setInterpolationMethod('linear')}
+              aria-label="Select Linear interpolation method"
+              className={`px-4 py-3 rounded-lg border text-sm font-medium transition-all text-left flex-1 ${
+                interpolationMethod === 'linear'
+                  ? 'bg-amber-500/20 border-amber-500 text-amber-400'
+                  : 'bg-background border-border text-gray-400 hover:border-gray-500'
+              }`}
+            >
+              <div className="font-semibold mb-1">Linear Interpolation</div>
+              <div className="text-xs opacity-75">
+                Simple linear interpolation in arithmetic space. Less accurate for IDF relationships, but still available when needed.
+              </div>
+            </button>
+          </div>
+          <div className="mt-4 p-3 bg-slate-900/50 rounded-lg text-xs text-gray-400">
+            <strong className="text-gray-300">Current Selection:</strong> {getRainfallMethodLabel(rainfallMethod)} using {getInterpolationMethodLabel(interpolationMethod)} interpolation.
+          </div>
         </div>
-        <p className="text-sm text-gray-400 mb-4">
-          Select how rainfall data is interpolated between duration points. The IDF curve above updates to reflect the selected method.
-        </p>
-        <div className="flex flex-col sm:flex-row gap-3">
-          <button
-            onClick={() => setInterpolationMethod('log-log')}
-            aria-label="Select Log-Log interpolation method"
-            className={`px-4 py-3 rounded-lg border text-sm font-medium transition-all text-left flex-1 ${
-              interpolationMethod === 'log-log'
-                ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400'
-                : 'bg-background border-border text-gray-400 hover:border-gray-500'
-            }`}
-          >
-            <div className="font-semibold mb-1">Log-Log Interpolation</div>
-            <div className="text-xs opacity-75">
-              Standard method for IDF curves. Interpolates linearly in log-log space, producing power-law relationships between data points. Curves appear as straight lines on the log-log graph.
+      )}
+
+      {rainfallMethod === 'manual-idf' && (
+        <div className="mb-8 bg-card p-6 rounded-lg border border-amber-500/30 shadow-lg">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 bg-amber-500/10 rounded-full text-amber-300">
+              <Settings className="w-5 h-5" />
             </div>
-          </button>
-          <button
-            onClick={() => setInterpolationMethod('linear')}
-            aria-label="Select Linear interpolation method"
-            className={`px-4 py-3 rounded-lg border text-sm font-medium transition-all text-left flex-1 ${
-              interpolationMethod === 'linear'
-                ? 'bg-amber-500/20 border-amber-500 text-amber-400'
-                : 'bg-background border-border text-gray-400 hover:border-gray-500'
-            }`}
-          >
-            <div className="font-semibold mb-1">Linear Interpolation</div>
-            <div className="text-xs opacity-75">
-              Simple linear interpolation in arithmetic space. Less accurate for IDF relationships. Curves appear curved on the log-log graph because linear segments in arithmetic space are not linear in log-log space.
+            <div>
+              <h2 className="text-lg font-semibold">Manual IDF EBD Coefficients</h2>
+              <p className="text-sm text-gray-400">Enter the b, d, and e values used in I = b / (Tc + d)^e. These values are used app-wide and saved with the project.</p>
             </div>
-          </button>
+          </div>
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead className="bg-slate-900/60 text-gray-300">
+                <tr>
+                  <th className="px-4 py-3 text-left">Storm</th>
+                  <th className="px-4 py-3 text-left">b</th>
+                  <th className="px-4 py-3 text-left">d</th>
+                  <th className="px-4 py-3 text-left">e</th>
+                </tr>
+              </thead>
+              <tbody>
+                {MANUAL_IDF_EDITABLE_EVENTS.map((event) => (
+                  <tr key={event} className="border-t border-border">
+                    <td className="px-4 py-3 font-medium text-white">{event.toUpperCase()}</td>
+                    {(['b', 'd', 'e'] as const).map((field) => (
+                      <td key={field} className="px-4 py-3">
+                        <input
+                          type="number"
+                          step="0.001"
+                          value={manualIdfCoefficients[event]?.[field] ?? ''}
+                          onChange={(e) => updateManualIdfCoefficient(event, field, e.target.value)}
+                          placeholder="Enter value"
+                          className="w-full rounded border border-border bg-slate-900 px-3 py-2 text-white focus:border-amber-400 focus:outline-none"
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
+            Manual IDF keeps all storm-event wiring active. Any storm row left blank will display as N/A in Hydrology and calculate as zero until valid b, d, and e values are entered.
+          </div>
         </div>
-        <div className="mt-4 p-3 bg-slate-900/50 rounded-lg text-xs text-gray-400">
-          <strong className="text-gray-300">Note:</strong> The graph always uses log-log axes (standard in hydrology). 
-          The interpolation method affects how values are calculated between source data points. 
-          Log-log interpolation is generally preferred because IDF relationships follow power laws.
-        </div>
-      </div>
+      )}
 
     </div>
   );
