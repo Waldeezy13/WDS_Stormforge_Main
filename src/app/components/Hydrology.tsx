@@ -6,7 +6,7 @@ import { MapPin, CloudRain, Settings, Globe, Loader2, AlertCircle, CheckCircle2 
 import RainfallDataImport from './Atlas14Import';
 import IdfCurveChart from './charts/IdfCurveChart';
 import SearchableComboBox, { ComboBoxOption } from './SearchableComboBox';
-import { MANUAL_IDF_EDITABLE_EVENTS, supportsManualIdf } from '@/utils/manualIdf';
+import { MANUAL_IDF_EDITABLE_EVENTS, MUNICIPAL_RAINFALL_PRESETS, createMunicipalRainfallPresetCoefficients, supportsManualIdf } from '@/utils/manualIdf';
 
 interface HydrologyProps {
   cityId: number;
@@ -14,6 +14,7 @@ interface HydrologyProps {
   selectedEvents: ReturnPeriod[];
   setSelectedEvents: (events: ReturnPeriod[]) => void;
   rainfallMethod: RainfallMethod;
+  setRainfallMethod: (method: RainfallMethod) => void;
   manualIdfCoefficients: ManualIdfCoefficientsByPeriod;
   setManualIdfCoefficients: React.Dispatch<React.SetStateAction<ManualIdfCoefficientsByPeriod>>;
   interpolationMethod: InterpolationMethod;
@@ -22,11 +23,12 @@ interface HydrologyProps {
 
 const AVAILABLE_EVENTS: ReturnPeriod[] = ['1yr', '2yr', '5yr', '10yr', '25yr', '50yr', '100yr', '500yr'];
 
-export default function Hydrology({ cityId, setCityId, selectedEvents, setSelectedEvents, rainfallMethod, manualIdfCoefficients, setManualIdfCoefficients, interpolationMethod, setInterpolationMethod }: HydrologyProps) {
+export default function Hydrology({ cityId, setCityId, selectedEvents, setSelectedEvents, rainfallMethod, setRainfallMethod, manualIdfCoefficients, setManualIdfCoefficients, interpolationMethod, setInterpolationMethod }: HydrologyProps) {
   const [citiesByState, setCitiesByState] = useState<Record<string, City[]>>({});
   const [rainfallData, setRainfallData] = useState<Array<{ durationMinutes: number; intensities: Record<ReturnPeriod, number> }>>([]);
   const [loading, setLoading] = useState(true);
   const [showImport, setShowImport] = useState(false);
+  const [selectedPresetId, setSelectedPresetId] = useState(MUNICIPAL_RAINFALL_PRESETS[0]?.id ?? 'default-municipal');
   
   // NOAA Atlas 14 fetch states
   const [showNoaaFetch, setShowNoaaFetch] = useState(false);
@@ -67,6 +69,10 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
 
       return next;
     });
+  };
+
+  const applyMunicipalPreset = () => {
+    setManualIdfCoefficients(createMunicipalRainfallPresetCoefficients(selectedPresetId));
   };
 
   // Function to reload cities and data
@@ -271,6 +277,41 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
 
   return (
     <div className="p-8 max-w-7xl mx-auto text-foreground">
+      <div className="mb-8 bg-card p-6 rounded-lg border border-border shadow-lg">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="p-2 bg-primary/10 rounded-full text-primary">
+            <CloudRain className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-xl font-semibold">Rainfall Method</h2>
+            <p className="text-sm text-gray-400">Choose whether intensities come from NOAA Atlas 14 data or a municipal B/D/E coefficient equation.</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <button
+            onClick={() => setRainfallMethod('atlas14')}
+            className={`rounded-lg border px-4 py-4 text-left transition-all ${
+              rainfallMethod === 'atlas14'
+                ? 'border-primary bg-primary/10 text-white'
+                : 'border-border bg-background text-gray-300 hover:border-gray-500'
+            }`}
+          >
+            <div className="font-semibold">NOAA Atlas 14</div>
+            <div className="mt-1 text-xs opacity-80">Use saved or imported location rainfall data with selectable interpolation.</div>
+          </button>
+          <button
+            onClick={() => setRainfallMethod('manual-idf')}
+            className={`rounded-lg border px-4 py-4 text-left transition-all ${
+              rainfallMethod === 'manual-idf'
+                ? 'border-amber-400 bg-amber-500/10 text-white'
+                : 'border-border bg-background text-gray-300 hover:border-gray-500'
+            }`}
+          >
+            <div className="font-semibold">Municipal IDF (B/D/E)</div>
+            <div className="mt-1 text-xs opacity-80">Use $I = b / (T_c + d)^e$ coefficients with editable storm-specific values.</div>
+          </button>
+        </div>
+      </div>
       
       <div className="flex flex-col md:flex-row gap-8 mb-10">
         {/* City Selection */}
@@ -298,25 +339,31 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
             />
           )}
           <p className="text-xs text-gray-500 mt-3">
-            {selectedCity 
-              ? `Loading rainfall data for ${selectedCity.name}, ${selectedCity.state}${selectedCity.source ? ` (${selectedCity.source})` : ''}.`
-              : 'Select a city to view rainfall data.'}
+            {rainfallMethod === 'manual-idf'
+              ? selectedCity
+                ? `Location remains available for project context and for switching back to Atlas 14. Municipal B/D/E coefficients drive the active calculations for ${selectedCity.name}, ${selectedCity.state}.`
+                : 'Select a city to keep project context, even when municipal B/D/E coefficients are driving the active calculations.'
+              : selectedCity 
+                ? `Loading rainfall data for ${selectedCity.name}, ${selectedCity.state}${selectedCity.source ? ` (${selectedCity.source})` : ''}.`
+                : 'Select a city to view rainfall data.'}
           </p>
-          <div className="flex gap-3 mt-3">
-            <button
-              onClick={() => setShowImport(!showImport)}
-              className="text-xs text-primary hover:underline"
-            >
-              {showImport ? 'Hide' : 'Show'} CSV Import
-            </button>
-            <button
-              onClick={() => setShowNoaaFetch(!showNoaaFetch)}
-              className="text-xs text-emerald-400 hover:underline flex items-center gap-1"
-            >
-              <Globe className="w-3 h-3" />
-              {showNoaaFetch ? 'Hide' : 'Fetch from'} NOAA Atlas 14
-            </button>
-          </div>
+          {rainfallMethod === 'atlas14' && (
+            <div className="flex gap-3 mt-3">
+              <button
+                onClick={() => setShowImport(!showImport)}
+                className="text-xs text-primary hover:underline"
+              >
+                {showImport ? 'Hide' : 'Show'} CSV Import
+              </button>
+              <button
+                onClick={() => setShowNoaaFetch(!showNoaaFetch)}
+                className="text-xs text-emerald-400 hover:underline flex items-center gap-1"
+              >
+                <Globe className="w-3 h-3" />
+                {showNoaaFetch ? 'Hide' : 'Fetch from'} NOAA Atlas 14
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Storm Event Selection */}
@@ -346,21 +393,21 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
           </div>
           {missingSelectedManualIdfEvents.length > 0 && (
             <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
-              Manual IDF is selected, but these active storms do not have complete EBD values: {missingSelectedManualIdfEvents.map((event) => event.toUpperCase()).join(', ')}. They will display as N/A and calculate as zero until b, d, and e are entered below.
+              Municipal IDF (B/D/E) is selected, but these active storms do not have complete coefficients: {missingSelectedManualIdfEvents.map((event) => event.toUpperCase()).join(', ')}. They will display as N/A and calculate as zero until b, d, and e are entered below.
             </div>
           )}
         </div>
       </div>
 
       {/* CSV Import Section */}
-      {showImport && (
+      {rainfallMethod === 'atlas14' && showImport && (
         <div className="mb-8">
           <RainfallDataImport />
         </div>
       )}
 
       {/* NOAA Atlas 14 Fetch Section */}
-      {showNoaaFetch && (
+      {rainfallMethod === 'atlas14' && showNoaaFetch && (
         <div className="mb-8 bg-card p-6 rounded-lg border border-border shadow-lg">
           <div className="flex items-center gap-3 mb-4">
             <div className="p-2 bg-emerald-500/10 rounded-full text-emerald-400">
@@ -605,9 +652,35 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
               <Settings className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold">Manual IDF EBD Coefficients</h2>
+              <h2 className="text-lg font-semibold">Municipal IDF (B/D/E) Coefficients</h2>
               <p className="text-sm text-gray-400">Enter the b, d, and e values used in I = b / (Tc + d)^e. These values are used app-wide and saved with the project.</p>
             </div>
+          </div>
+          <div className="mb-4 rounded-lg border border-border bg-slate-900/40 p-4">
+            <div className="flex flex-col lg:flex-row lg:items-end gap-3">
+              <div className="flex-1">
+                <label className="block text-xs text-gray-400 mb-1">Municipal Preset</label>
+                <select
+                  value={selectedPresetId}
+                  onChange={(e) => setSelectedPresetId(e.target.value)}
+                  className="w-full rounded border border-border bg-slate-900 px-3 py-2 text-white focus:border-amber-400 focus:outline-none"
+                >
+                  {MUNICIPAL_RAINFALL_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id}>{preset.label}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={applyMunicipalPreset}
+                className="rounded border border-amber-400/40 bg-amber-500/10 px-4 py-2 text-sm font-medium text-amber-200 transition-colors hover:bg-amber-500/20"
+              >
+                Apply Preset
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-gray-400">
+              {MUNICIPAL_RAINFALL_PRESETS.find((preset) => preset.id === selectedPresetId)?.description} Applying a preset replaces the current coefficient table.
+            </p>
           </div>
           <div className="overflow-x-auto rounded-lg border border-border">
             <table className="w-full min-w-[640px] text-sm">
@@ -641,7 +714,7 @@ export default function Hydrology({ cityId, setCityId, selectedEvents, setSelect
             </table>
           </div>
           <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
-            Manual IDF keeps all storm-event wiring active. Any storm row left blank will display as N/A in Hydrology and calculate as zero until valid b, d, and e values are entered.
+            Municipal IDF keeps all storm-event wiring active. Any storm row left blank will display as N/A in Hydrology and calculate as zero until valid b, d, and e values are entered.
           </div>
         </div>
       )}

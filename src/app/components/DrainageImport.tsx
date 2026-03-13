@@ -459,7 +459,7 @@ export default function DrainageImport({
                             )}
                           </td>
                           <td className="px-3 py-2 text-white cursor-pointer" onClick={() => toggleRow(i)}>
-                            {row.dto.parcelName || row.dto.daId || `Area ${i + 1}`}
+                            {row.dto.daName || row.dto.parcelName || row.dto.daId || `Area ${i + 1}`}
                           </td>
                           <td className="px-3 py-2 text-center">
                             <select
@@ -522,6 +522,10 @@ export default function DrainageImport({
                                   <span className="text-gray-300">
                                     {row.dto.pctImpervious !== null ? `${row.dto.pctImpervious}%` : '-'}
                                   </span>
+                                </div>
+                                <div>
+                                  <span className="text-gray-500">DA Name:</span>{' '}
+                                  <span className="text-gray-300">{row.dto.daName || '-'}</span>
                                 </div>
                                 <div>
                                   <span className="text-gray-500">Target Node:</span>{' '}

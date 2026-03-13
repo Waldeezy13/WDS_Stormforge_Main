@@ -17,6 +17,7 @@ export interface DrainageImportSource {
   soilGroup?: string;
   pctImpervious?: number;
   targetNodeId?: string;
+  designPointName?: string;
   hydroMethod?: string;
   designStormYR?: number;
   notes?: string;

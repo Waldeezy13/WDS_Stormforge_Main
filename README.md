@@ -1,6 +1,6 @@
 # WDS Stormforge
 
-WDS Stormforge is a web app for detention pond design using the Modified Rational Method with NOAA Atlas 14 IDF data (Next.js 16 / React 19 / TypeScript / Tailwind).
+WDS Stormforge is a web app for detention pond design using the Modified Rational Method with either NOAA Atlas 14 IDF data or municipal B/D/E rainfall coefficients (Next.js 16 / React 19 / TypeScript / Tailwind).
 
 ## Quickstart
 
@@ -11,7 +11,7 @@ npm run dev
 
 ## What it does
 
-- Hydrology: select a saved location or fetch Atlas 14 by lat/lon, then view IDF curves and choose storm events
+- Hydrology: select NOAA Atlas 14 or municipal B/D/E rainfall, then manage locations, coefficients, IDF curves, and storm events
 - Drainage: define existing/proposed drainage areas (C, Tc, acres)
 - Pond sizing: storage via Modified Rational Method (generic prism or imported stage-storage)
 - Outfall: outlet/orifice sizing and regime checks

@@ -115,7 +115,7 @@ export function validateProjectFile(data: unknown): ProjectFileValidationResult 
   }
 
   if (typeof state.manualIdfCoefficients === 'undefined') {
-    warnings.push('state.manualIdfCoefficients missing; default Manual IDF values will be used');
+    warnings.push('state.manualIdfCoefficients missing; default municipal B/D/E values will be used');
   } else if (!isRecord(state.manualIdfCoefficients)) {
     errors.push('state.manualIdfCoefficients must be an object');
   }

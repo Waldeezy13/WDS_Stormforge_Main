@@ -34,7 +34,7 @@ export interface City {
 }
 
 export function getRainfallMethodLabel(method: RainfallMethod): string {
-  return method === 'manual-idf' ? 'Manual IDF' : 'NOAA Atlas 14';
+  return method === 'manual-idf' ? 'Municipal IDF (B/D/E)' : 'NOAA Atlas 14';
 }
 
 export function getInterpolationMethodLabel(method: InterpolationMethod): string {

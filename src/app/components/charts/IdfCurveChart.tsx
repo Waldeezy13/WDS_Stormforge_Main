@@ -293,7 +293,7 @@ export default function IdfCurveChart({
         </div>
         <p className="text-xs text-gray-500">
           {rainfallMethod === 'manual-idf'
-            ? 'Curves are computed directly from the Manual IDF equation. Points are shown only for supported storms.'
+            ? 'Curves are computed directly from the municipal B/D/E equation. Points are shown only for supported storms.'
             : interpolationMethod === 'log-log' 
               ? 'Curves appear as straight lines between data points (standard for IDF relationships).'
               : 'Curves appear curved between data points on the log-log scale graph.'}

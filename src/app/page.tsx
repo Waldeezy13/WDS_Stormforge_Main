@@ -705,7 +705,7 @@ export default function Home() {
                 className="bg-slate-800 border border-border rounded px-3 py-1.5 text-xs text-white focus:ring-1 focus:ring-primary outline-none"
               >
                 <option value="atlas14">NOAA Atlas 14</option>
-                <option value="manual-idf">Manual IDF</option>
+                <option value="manual-idf">Municipal IDF (B/D/E)</option>
               </select>
             </div>
             {rainfallMethod === 'atlas14' ? (
@@ -727,7 +727,7 @@ export default function Home() {
                 onClick={() => setActiveTab('hydrology')}
                 className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-200 transition-colors hover:bg-amber-500/20"
               >
-                Edit EBD Values
+                Edit B/D/E Values
               </button>
             )}
           </div>
@@ -743,6 +743,7 @@ export default function Home() {
               selectedEvents={selectedEvents}
               setSelectedEvents={setSelectedEvents}
               rainfallMethod={rainfallMethod}
+              setRainfallMethod={setRainfallMethod}
               manualIdfCoefficients={manualIdfCoefficients}
               setManualIdfCoefficients={setManualIdfCoefficients}
               interpolationMethod={interpolationMethod}

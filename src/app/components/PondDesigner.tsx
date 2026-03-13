@@ -1050,7 +1050,7 @@ export default function PondDesigner({
                 onMethodChange={setCalculationMethod}
               />
               <div className="rounded border border-border bg-slate-800/50 px-3 py-2 text-xs text-gray-300">
-                Rainfall: <span className="font-semibold text-white">{rainfallMethod === 'manual-idf' ? 'Manual IDF' : 'NOAA Atlas 14'}</span>
+                Rainfall: <span className="font-semibold text-white">{rainfallMethod === 'manual-idf' ? 'Municipal IDF (B/D/E)' : 'NOAA Atlas 14'}</span>
               </div>
             </div>
           </div>

@@ -374,9 +374,9 @@ export default function Drainage({ cityId, selectedEvents, rainfallMethod, manua
 
       // Only sum included, non-bypass areas for pond routing
 
-      const pondAreas = areas.filter(a => a.type === type && a.isIncluded && !(a.isBypass ?? false));
+      const pondAreas = activeAreas.filter(a => a.type === type && a.isIncluded && !(a.isBypass ?? false));
 
-      const bypassAreas = areas.filter(a => a.type === type && a.isIncluded && (a.isBypass ?? false));
+      const bypassAreas = activeAreas.filter(a => a.type === type && a.isIncluded && (a.isBypass ?? false));
 
       
 
@@ -394,7 +394,7 @@ export default function Drainage({ cityId, selectedEvents, rainfallMethod, manua
 
       const flowTotals = selectedEvents.reduce((acc, event) => {
 
-          acc[event] = results
+          acc[event] = activeResults
 
             .filter(r => r.type === type && r.isIncluded && !(r.isBypass ?? false))
 
@@ -410,7 +410,7 @@ export default function Drainage({ cityId, selectedEvents, rainfallMethod, manua
 
       const bypassFlowTotals = selectedEvents.reduce((acc, event) => {
 
-          acc[event] = results
+          acc[event] = activeResults
 
             .filter(r => r.type === type && r.isIncluded && (r.isBypass ?? false))
 
@@ -424,7 +424,7 @@ export default function Drainage({ cityId, selectedEvents, rainfallMethod, manua
 
       return { totalArea, weightedC, tcMinutes, flowTotals, bypassFlowTotals, bypassArea };
 
-  }, [activeAreas, results, selectedEvents]);
+  }, [activeAreas, activeResults, selectedEvents]);
 
 
 
@@ -447,8 +447,95 @@ export default function Drainage({ cityId, selectedEvents, rainfallMethod, manua
 
 
   // Handle import completion
+  const normalizeDesignPointName = (value: string): string => value.trim().toLowerCase();
+
+  const canonicalizeDesignPointName = (value: string): string => {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+
+    const numericMatch = trimmed.match(/^(?:design\s*point\s*)?(\d+)$/i);
+    if (numericMatch) {
+      return `Design Point ${parseInt(numericMatch[1], 10)}`;
+    }
+
+    return trimmed;
+  };
+
   const handleImportComplete = useCallback((newAreas: DrainageArea[]) => {
     setAreas(newAreas);
+
+    setDesignPoints(prev => {
+      const seeded = prev.length > 0
+        ? prev
+        : [{ id: 'dp-1', name: 'Design Point 1', note: '', toggles: {} }];
+
+      // Work on mutable copies so we can add design points before final mapping.
+      const nextPoints = seeded.map(dp => ({ ...dp, toggles: { ...dp.toggles } }));
+      const designPointByName = new Map<string, string>();
+      for (const dp of nextPoints) {
+        designPointByName.set(normalizeDesignPointName(dp.name), dp.id);
+      }
+
+      const defaultId = designPointByName.get('design point 1') ?? nextPoints[0]?.id ?? 'dp-1';
+
+      const alreadyAssigned = new Set<string>();
+      for (const dp of nextPoints) {
+        for (const areaId of Object.keys(dp.toggles)) {
+          alreadyAssigned.add(areaId);
+        }
+      }
+
+      const newAssignments = new Map<string, { dpId: string; isIncluded: boolean; isBypass: boolean }>();
+
+      for (const area of newAreas) {
+        if (area.importSource?.type !== 'C3D') continue;
+        if (alreadyAssigned.has(area.id)) continue;
+
+        const raw = area.importSource?.rawC3DData;
+        const candidate = canonicalizeDesignPointName(
+          raw?.designPointName ||
+          raw?.targetNodeId ||
+          area.importSource?.designPointName ||
+          area.importSource?.targetNodeId ||
+          ''
+        );
+
+        let dpId = defaultId;
+        if (candidate) {
+          const normalized = normalizeDesignPointName(candidate);
+          const existingId = designPointByName.get(normalized);
+
+          if (existingId) {
+            dpId = existingId;
+          } else {
+            dpId = crypto.randomUUID();
+            nextPoints.push({ id: dpId, name: candidate, note: '', toggles: {} });
+            designPointByName.set(normalized, dpId);
+          }
+        }
+
+        newAssignments.set(area.id, {
+          dpId,
+          isIncluded: area.isIncluded,
+          isBypass: area.isBypass ?? false,
+        });
+      }
+
+      if (newAssignments.size === 0) return seeded;
+
+      return nextPoints.map(dp => {
+        const toggles = { ...dp.toggles };
+        for (const [areaId, assignment] of newAssignments.entries()) {
+          const isAssignedDp = dp.id === assignment.dpId;
+          toggles[areaId] = {
+            isIncluded: isAssignedDp ? assignment.isIncluded : false,
+            isBypass: isAssignedDp ? assignment.isBypass : false,
+          };
+        }
+        return { ...dp, toggles };
+      });
+    });
+
     setImportMeta(getImportMetadata());
   }, []);
 

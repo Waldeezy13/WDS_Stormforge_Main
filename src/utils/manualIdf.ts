@@ -8,6 +8,13 @@ export type ManualIdfCoefficients = {
 
 export type ManualIdfCoefficientsByPeriod = Partial<Record<ReturnPeriod, ManualIdfCoefficients>>;
 
+export interface MunicipalRainfallPreset {
+  id: string;
+  label: string;
+  description: string;
+  coefficients: ManualIdfCoefficientsByPeriod;
+}
+
 export const MANUAL_IDF_EDITABLE_EVENTS: ReturnPeriod[] = ['1yr', '2yr', '5yr', '10yr', '25yr', '50yr', '100yr', '500yr'];
 
 export const DEFAULT_MANUAL_IDF_COEFFICIENTS: ManualIdfCoefficientsByPeriod = {
@@ -18,6 +25,15 @@ export const DEFAULT_MANUAL_IDF_COEFFICIENTS: ManualIdfCoefficientsByPeriod = {
 };
 
 export const MANUAL_IDF_SUPPORTED_EVENTS: ReturnPeriod[] = ['2yr', '5yr', '25yr', '100yr'];
+
+export const MUNICIPAL_RAINFALL_PRESETS: MunicipalRainfallPreset[] = [
+  {
+    id: 'default-municipal',
+    label: 'Default Municipal B/D/E',
+    description: 'Built-in municipal B/D/E coefficients for the 2-, 5-, 25-, and 100-year events.',
+    coefficients: DEFAULT_MANUAL_IDF_COEFFICIENTS,
+  },
+];
 
 function hasCompleteManualIdfCoefficients(
   coefficients: ManualIdfCoefficients | undefined
@@ -33,6 +49,18 @@ function hasCompleteManualIdfCoefficients(
 export function createDefaultManualIdfCoefficients(): ManualIdfCoefficientsByPeriod {
   return Object.fromEntries(
     Object.entries(DEFAULT_MANUAL_IDF_COEFFICIENTS).map(([returnPeriod, coefficients]) => [
+      returnPeriod,
+      coefficients ? { ...coefficients } : coefficients,
+    ])
+  ) as ManualIdfCoefficientsByPeriod;
+}
+
+export function createMunicipalRainfallPresetCoefficients(presetId = 'default-municipal'): ManualIdfCoefficientsByPeriod {
+  const preset = MUNICIPAL_RAINFALL_PRESETS.find((entry) => entry.id === presetId);
+  const source = preset?.coefficients ?? DEFAULT_MANUAL_IDF_COEFFICIENTS;
+
+  return Object.fromEntries(
+    Object.entries(source).map(([returnPeriod, coefficients]) => [
       returnPeriod,
       coefficients ? { ...coefficients } : coefficients,
     ])

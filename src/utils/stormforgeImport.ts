@@ -38,8 +38,10 @@ export interface DrainageAreaExportDto {
   perimeter?: number;
 
   // Identity fields (from WD_Drainage property set)
+  daName?: string;
   daId: string;
   targetNodeId: string;
+  designPointName?: string;
 
   // Design Inputs (from WD_Drainage property set)
   runoffC: number | null;
@@ -144,7 +146,7 @@ export function validateStormforgeExport(data: unknown): ImportValidationResult 
   root.drainageAreas.forEach((area, index) => {
     const prefix = `Area ${index + 1}`;
     
-    if (!area.parcelName && !area.daId) {
+    if (!area.daName && !area.parcelName && !area.daId) {
       warnings.push(`${prefix}: No name or ID - will use generic name`);
     }
 
@@ -186,7 +188,7 @@ export function mapDtoToDrainageArea(
   const id = dto.daId || dto.parcelHandle || `imported-${type}-${index}-${Date.now()}`;
   
   // Determine name
-  const name = dto.parcelName || dto.daId || `Imported Area ${index + 1}`;
+  const name = dto.daName || dto.parcelName || dto.daId || `Imported Area ${index + 1}`;
 
   // Build import source tracking
   const importSource: DrainageImportSource = {
@@ -200,6 +202,7 @@ export function mapDtoToDrainageArea(
     soilGroup: dto.soilGroup || undefined,
     pctImpervious: dto.pctImpervious ?? undefined,
     targetNodeId: dto.targetNodeId || undefined,
+    designPointName: dto.designPointName || undefined,
     hydroMethod: dto.hydroMethod || undefined,
     designStormYR: dto.designStormYR ?? undefined,
     notes: dto.notes || undefined,
@@ -389,22 +392,34 @@ export function extractReturnPeriods(exportData: StormforgeExportRoot): {
   detected: ReturnPeriod[];
   allPeriods: number[];
 } {
-  const allPeriods = new Set<number>();
+  const explicitPeriods = new Set<number>();
+  const fallbackPeriods = new Set<number>();
   
   for (const area of exportData.drainageAreas) {
     if (area.returnPeriods && Array.isArray(area.returnPeriods)) {
       for (const period of area.returnPeriods) {
-        allPeriods.add(period);
+        explicitPeriods.add(period);
       }
     }
-    // Also check designStormYR as fallback
+
+    // Only used when explicit returnPeriods are not provided.
     if (area.designStormYR && typeof area.designStormYR === 'number') {
-      allPeriods.add(area.designStormYR);
+      fallbackPeriods.add(area.designStormYR);
+    }
+
+    // Legacy fallback: infer from per-storm result entries when no explicit list exists.
+    if (Array.isArray(area.stormResults)) {
+      for (const result of area.stormResults) {
+        if (typeof result.returnPeriod === 'number') {
+          fallbackPeriods.add(result.returnPeriod);
+        }
+      }
     }
   }
 
+  const sourcePeriods = explicitPeriods.size > 0 ? explicitPeriods : fallbackPeriods;
   const detected: ReturnPeriod[] = [];
-  const sortedPeriods = Array.from(allPeriods).sort((a, b) => a - b);
+  const sortedPeriods = Array.from(sourcePeriods).sort((a, b) => a - b);
   
   for (const period of sortedPeriods) {
     const mapped = RETURN_PERIOD_MAP[period];
@@ -498,6 +513,7 @@ export function exportToStormforgeJson(
       // Identity fields
       daId: rawData?.daId ?? area.importSource?.daId ?? area.id,
       targetNodeId: rawData?.targetNodeId ?? area.importSource?.targetNodeId ?? '',
+      designPointName: rawData?.designPointName ?? area.importSource?.designPointName ?? 'Design Point 1',
       
       // Design Inputs - use current values where appropriate
       runoffC: area.cFactor,

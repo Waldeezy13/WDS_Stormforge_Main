@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-WDS Stormforge is a **civil engineering stormwater pond design tool** built with Next.js 16 (App Router), React 19, TypeScript, and Tailwind CSS. It helps engineers design detention ponds by calculating required storage volumes using the Modified Rational Method and NOAA Atlas 14 rainfall data.
+WDS Stormforge is a **civil engineering stormwater pond design tool** built with Next.js 16 (App Router), React 19, TypeScript, and Tailwind CSS. It helps engineers design detention ponds by calculating required storage volumes using the Modified Rational Method with either NOAA Atlas 14 rainfall data or municipal B/D/E rainfall coefficients.
 
 ## Quick Reference
 
